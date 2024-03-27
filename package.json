@@ -1,0 +1,17 @@
+{
+  "name": "jechain",
+  "version": "0.30.1",
+  "description": "Node for JeChain - an experimental smart contract blockchain network",
+  "main": "./index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "nguyenphuminh",
+  "license": "GPL-3.0",
+  "dependencies": {
+    "elliptic": "^6.5.4",
+    "fastify": "^3.29.0",
+    "level": "^8.0.0",
+    "ws": "^8.2.3"
+  }
+}

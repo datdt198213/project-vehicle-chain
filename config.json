@@ -1,0 +1,15 @@
+{
+    "PORT": 10500,
+    "MY_ADDRESS": "a8029784caa3879169deb69d725a8106e7eb34cce99ced2f4cac99fbc7f76608",
+
+    "RPC_PORT": 20297,
+    "PEERS": [],
+    "MAX_PEERS": 10,
+    
+    "PRIVATE_KEY": "bfd031695d7263b2c9948f17f88a02513c33e1f3298c260f3d1712f936b34b0e",
+    
+    "ENABLE_MINING": true,
+    "ENABLE_LOGGING": true,
+    "ENABLE_RPC": true,
+    "ENABLE_CHAIN_REQUEST": false
+}
