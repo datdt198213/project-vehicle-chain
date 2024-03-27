@@ -15,7 +15,7 @@ const generateGenesisBlock = require("../core/genesis");
 const { addTransaction, clearDepreciatedTxns }= require("../core/txPool");
 const rpc = require("../rpc/rpc");
 const TYPE = require("./message-types");
-const { verifyBlock, updateDifficulty } = require("../consensus/consensus");
+const { verifyBlock} = require("../consensus/consensus");
 const { parseJSON, numToBuffer, serializeState, deserializeState } = require("../utils/utils");
 const jelscript = require("../core/runtime");
 const Merkle = require("../core/merkle");
@@ -37,7 +37,7 @@ const chainInfo = {
     syncQueue: new SyncQueue(this),
     syncing: false,
     checkedBlock: {},
-    difficulty: 1
+    // difficulty: 1
 };
 
 const stateDB = new Level(__dirname + "/../../log/stateStore", { valueEncoding: "buffer" });
@@ -320,7 +320,7 @@ async function startServer(options) {
                 `\x1b[32mLOG\x1b[0m [${(new Date()).toISOString()}] Created Genesis Block with:\n` +
                 `    Block number: ${chainInfo.latestBlock.blockNumber.toString()}\n` +
                 `    Timestamp: ${chainInfo.latestBlock.timestamp.toString()}\n` +
-                `    Difficulty: ${chainInfo.latestBlock.difficulty.toString()}\n` +
+                // `    Difficulty: ${chainInfo.latestBlock.difficulty.toString()}\n` +
                 `    Coinbase: ${chainInfo.latestBlock.coinbase.toString()}\n` +
                 `    Hash: ${chainInfo.latestBlock.hash.toString()}\n` +
                 `    TxRoot: ${chainInfo.latestBlock.txRoot.toString()}`
@@ -329,7 +329,7 @@ async function startServer(options) {
             await changeState(chainInfo.latestBlock, stateDB, codeDB);
         } else {
             chainInfo.latestBlock = Block.deserialize([...await blockDB.get( Math.max(...(await blockDB.keys().all()).map(key => parseInt(key))).toString() )]);
-            chainInfo.difficulty = chainInfo.latestBlock.difficulty;
+            // chainInfo.difficulty = chainInfo.latestBlock.difficulty;
         }
     }
 
@@ -428,7 +428,7 @@ async function mine(publicKey, ENABLE_LOGGING) {
         chainInfo.latestBlock.blockNumber + 1, 
         Date.now(), 
         [], // Will add transactions down here 
-        chainInfo.difficulty, 
+        // chainInfo.difficulty, 
         chainInfo.latestBlock.hash,
         SHA256(publicKey)
     );
@@ -592,7 +592,8 @@ async function mine(publicKey, ENABLE_LOGGING) {
 
                 console.log(`\x1b[32mLOG\x1b[0m [${(new Date()).toISOString()}] Block #${chainInfo.latestBlock.blockNumber} mined and synced, state transited.`);
 
-                console.log(`Difficulty = ${chainInfo.latestBlock.difficulty} \tTransaction = ${chainInfo.latestBlock.transactions}`)
+                // console.log(`/*Difficulty = ${chainInfo.latestBlock.difficulty} */ \tTransaction = ${chainInfo.latestBlock.transactions}`)
+                console.log(`\tTransaction = ${chainInfo.latestBlock.transactions}`)
             } else {
                 mined = false;
             }

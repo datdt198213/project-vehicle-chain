@@ -49,8 +49,8 @@ function serializeState(stateHeader) {
 
     hexState += BigInt(stateHeader.balance).toString(16).padStart(22, "0");
     hexState += stateHeader.codeHash;
-    hexState += BigInt(stateHeader.nonce).toString(16).padStart(8, "0");
-    hexState += stateHeader.storageRoot;
+    // hexState += BigInt(stateHeader.nonce).toString(16).padStart(8, "0");
+    // hexState += stateHeader.storageRoot;
 
     return new Array(...Buffer.from(hexState, "hex"));
 }
@@ -65,8 +65,8 @@ function deserializeState(stateInBytes) {
     stateHeader.codeHash = hexState.slice(0, 64);
     hexState = hexState.slice(64);
 
-    stateHeader.nonce = parseInt("0x" + hexState.slice(0, 8));
-    hexState = hexState.slice(8);
+    // stateHeader.nonce = parseInt("0x" + hexState.slice(0, 8));
+    // hexState = hexState.slice(8);
 
     stateHeader.storageRoot = hexState.slice(0, 64);
     hexState = hexState.slice(64);

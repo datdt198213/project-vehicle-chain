@@ -16,7 +16,7 @@ class Block {
         // Block header
         this.blockNumber  = blockNumber;                       // Block's index in chain
         this.timestamp    = timestamp;                         // Block creation timestamp
-        this.difficulty   = difficulty;                        // Difficulty to mine block
+        // this.difficulty   = difficulty;                        // Difficulty to mine block
         this.parentHash   = parentHash;                        // Parent (previous) block's hash
         // this.nonce        = 0;                                 // Nonce
         this.coinbase     = coinbase;                          // Address to receive reward
@@ -48,7 +48,7 @@ class Block {
         // Timestamp
         blockHexStr += inputBlock.timestamp.toString(16).padStart(12, "0");
         // Difficulty
-        blockHexStr += inputBlock.difficulty.toString(16).padStart(16, "0");
+        // blockHexStr += inputBlock.difficulty.toString(16).padStart(16, "0");
         // Parent hash
         blockHexStr += inputBlock.parentHash.toString(16).padStart(64, "0");
         // Nonce
@@ -84,8 +84,8 @@ class Block {
         myBlock.timestamp = parseInt(blockHexStr.slice(0, 12), 16);
         blockHexStr = blockHexStr.slice(12);
 
-        myBlock.difficulty = parseInt(blockHexStr.slice(0, 16),16);
-        blockHexStr = blockHexStr.slice(16);
+        // myBlock.difficulty = parseInt(blockHexStr.slice(0, 16),16);
+        // blockHexStr = blockHexStr.slice(16);
 
         myBlock.parentHash = blockHexStr.slice(0, 64), 16;
         blockHexStr = blockHexStr.slice(64);
@@ -129,8 +129,7 @@ class Block {
         return SHA256(
             block.blockNumber.toString()       + 
             block.timestamp.toString()         + 
-            block.txRoot                       + 
-            block.difficulty.toString()        +
+            block.txRoot                       +
             block.parentHash                 
         );
     } 
