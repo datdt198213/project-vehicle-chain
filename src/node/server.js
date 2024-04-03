@@ -465,9 +465,14 @@ async function startServer(options) {
     }, 5000);
   }
 
-  const transactionNew = new Transaction("04042809485ba7ee059057d2f1eedb5a1f5f208e15f775c17ffd0bd744df0dd2a285b52859ac708ee7ee9d43f61c3eb2a498527121f2b22a5b4ce17b84ccdb6bd3", 30, 20, {contractGas: 2})
-  Transaction.sign(transactionNew, keyPair)
-  await sendTransaction(transactionNew)
+  // Transaction(recipient = "", amount = "0", gas = "1000000000000", additionalData = {}) {
+  // const transactionNew = new Transaction("04042809485ba7ee059057d2f1eedb5a1f5f208e15f775c17ffd0bd744df0dd2a285b52859ac708ee7ee9d43f61c3eb2a498527121f2b22a5b4ce17b84ccdb6bd3", 30, 20, {contractGas: 2})
+  // Transaction.sign(transactionNew, keyPair)
+  // await sendTransaction(transactionNew)
+
+  // const transaction1 = new Transaction("04324ae590b69c924fce7383f777c62868ce8a5deb23df58adb882f1c8d4e9cfa77e57a8a72832213bfbc6b641f42c492b638ae723e894db0463ddb3c8595f234b", 300, 200, {contractGas: 20})
+  // Transaction.sign(transaction1, keyPair)
+  // await sendTransaction(transaction1)
   
   if (ENABLE_MINING) loopMine(publicKey, ENABLE_CHAIN_REQUEST, ENABLE_LOGGING);
   if (ENABLE_RPC) rpc(RPC_PORT, { publicKey, mining: ENABLE_MINING, chainInfo }, sendTransaction, keyPair, stateDB, blockDB, bhashDB, codeDB, txhashDB);

@@ -17,7 +17,8 @@ async function changeState(newBlock, stateDB, codeDB, enableLogging = false) { /
     for (const tx of newBlock.transactions) {
         // If the address doesn't already exist in the chain state, we will create a new empty one.
         if (!existedAddresses.includes(tx.recipient)) {
-            await stateDB.put(tx.recipient, Buffer.from(serializeState({ balance: "0", codeHash: EMPTY_HASH, nonce: 0, storageRoot: EMPTY_HASH })));
+            // await stateDB.put(tx.recipient, Buffer.from(serializeState({ balance: "0", codeHash: EMPTY_HASH, nonce: 0, storageRoot: EMPTY_HASH })));
+            await stateDB.put(tx.recipient, Buffer.from(serializeState({ balance: "0", codeHash: EMPTY_HASH,  storageRoot: EMPTY_HASH })));
         }
 
         // Get sender's public key and address
@@ -26,7 +27,8 @@ async function changeState(newBlock, stateDB, codeDB, enableLogging = false) { /
 
         // If the address doesn't already exist in the chain state, we will create a new empty one.
         if (!existedAddresses.includes(txSenderAddress)) {
-            await stateDB.put(txSenderAddress, Buffer.from(serializeState({ balance: "0", codeHash: EMPTY_HASH, nonce: 0, storageRoot: EMPTY_HASH })));
+            // await stateDB.put(txSenderAddress, Buffer.from(serializeState({ balance: "0", codeHash: EMPTY_HASH, nonce: 0, storageRoot: EMPTY_HASH })));
+            await stateDB.put(txSenderAddress, Buffer.from(serializeState({ balance: "0", codeHash: EMPTY_HASH,  storageRoot: EMPTY_HASH })));
         } else if (typeof tx.additionalData.scBody === "string") { // Contract deployment
             const dataFromSender = deserializeState(await stateDB.get(txSenderAddress));
 
@@ -34,7 +36,6 @@ async function changeState(newBlock, stateDB, codeDB, enableLogging = false) { /
                 dataFromSender.codeHash = SHA256(tx.additionalData.scBody);
                 
                 await codeDB.put(dataFromSender.codeHash, tx.additionalData.scBody);
-
                 await stateDB.put(txSenderAddress, Buffer.from(serializeState(dataFromSender)));
             }
         }
@@ -50,14 +51,14 @@ async function changeState(newBlock, stateDB, codeDB, enableLogging = false) { /
             await stateDB.put(txSenderAddress, Buffer.from(serializeState({
                 balance: (BigInt(dataFromSender.balance) - totalAmountToPay).toString(),
                 codeHash: dataFromSender.codeHash,
-                nonce: dataFromSender.nonce + 1, // Update nonce
+                // nonce: dataFromSender.nonce + 1, // Update nonce
                 storageRoot: dataFromSender.storageRoot
             })));
     
             await stateDB.put(tx.recipient, Buffer.from(serializeState({
                 balance: (BigInt(dataFromRecipient.balance) + BigInt(tx.amount)).toString(),
                 codeHash: dataFromRecipient.codeHash,
-                nonce: dataFromRecipient.nonce,
+                // nonce: dataFromRecipient.nonce,
                 storageRoot: dataFromRecipient.storageRoot
             })));
     

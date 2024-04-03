@@ -190,10 +190,10 @@ async function jelscript(input, originalState = {}, gas, stateDB, block, txInfo,
 
 				break;
 
-			case "difficulty": // Block's difficulty
-				setMem(c, "0x" + block.difficulty.toString(16));
+			// case "difficulty": // Block's difficulty
+			// 	setMem(c, "0x" + block.difficulty.toString(16));
 
-				break;
+			// 	break;
 
 			// Transaction info
 

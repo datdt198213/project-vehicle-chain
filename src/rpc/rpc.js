@@ -165,6 +165,7 @@ function rpc(PORT, client, transactionHandler, keyPair, stateDB, blockDB, bhashD
                     throwError("Invalid request.", 400);
                 } else {
                     const dataFromTarget = deserializeState(await stateDB.get(req.body.params.address)); // Fetch target's state object
+                    console.log(`GET BALANCE: ${dataFromTarget}`)
                     const targetBalance = dataFromTarget.balance;                                        // Get target's balance
 
                     respond({ balance: targetBalance });
@@ -341,8 +342,9 @@ function rpc(PORT, client, transactionHandler, keyPair, stateDB, blockDB, bhashD
                     throwError("Invalid request.", 400);
                 } else {
                     respond({ message: "tx received." });
-
+                    
                     await transactionHandler(req.body.params.transaction);
+                    // await transactionHandler(Transaction.serialize(req.body.params.transaction));
                 }
 
                 break;

@@ -47,28 +47,27 @@ function numToBuffer(value) {
 function serializeState(stateHeader) {
     let hexState = "";
 
-    hexState += BigInt(stateHeader.balance).toString(16).padStart(22, "0");
-    hexState += stateHeader.codeHash;
-    // hexState += BigInt(stateHeader.nonce).toString(16).padStart(8, "0");
-    // hexState += stateHeader.storageRoot;
+    hexState += BigInt(stateHeader.balance).toString(16).padStart(22, "0"); // 00000005a23d031d262000
+
+    hexState += stateHeader.codeHash; // 00000005a23d031d262000e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
+    hexState += stateHeader.storageRoot; // 00000005a23d031d262000e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 
     return new Array(...Buffer.from(hexState, "hex"));
 }
 
 function deserializeState(stateInBytes) {
     const stateHeader = {};
-    let hexState = Buffer.from(stateInBytes).toString("hex");
+    let hexState = Buffer.from(stateInBytes).toString("hex"); //00000002d11e818e931000e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
     
-    stateHeader.balance = BigInt("0x" + hexState.slice(0, 22)).toString();
+    stateHeader.balance = BigInt("0x" + hexState.slice(0, 22)).toString(); // 202977000000000000
     hexState = hexState.slice(22);
+    
 
-    stateHeader.codeHash = hexState.slice(0, 64);
+    stateHeader.codeHash = hexState.slice(0, 64); // e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
     hexState = hexState.slice(64);
 
-    // stateHeader.nonce = parseInt("0x" + hexState.slice(0, 8));
-    // hexState = hexState.slice(8);
-
-    stateHeader.storageRoot = hexState.slice(0, 64);
+    stateHeader.storageRoot = hexState.slice(0, 64); // e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
     hexState = hexState.slice(64);
 
     return stateHeader;
