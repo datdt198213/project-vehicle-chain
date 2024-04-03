@@ -9,12 +9,13 @@ const { EMPTY_HASH, CONTRACT_FLAG } = require("../config.json");
 const { serialize } = require("v8");
 
 class Transaction {
-    constructor(recipient = "", amount = "0", gas = "1000000000000", additionalData = {}, nonce = 0) {
+    // constructor(recipient = "", amount = "0", gas = "1000000000000", additionalData = {}, nonce = 0) {
+    constructor(recipient = "", amount = "0", gas = "1000000000000", additionalData = {}) {
         this.recipient      = recipient;      // Recipient's address (public key)
         this.amount         = amount;         // Amount to be sent
         this.gas            = gas;            // Gas that transaction consumed + tip for miner
         this.additionalData = additionalData; // Additional data that goes into the transaction
-        this.nonce          = nonce           // Nonce for signature entropy
+        // this.nonce          = nonce           // Nonce for signature entropy
         this.signature      = {};             // Transaction's signature, will be generated later
     }
 
@@ -42,7 +43,7 @@ class Transaction {
         txHexString += BigInt(tx.gas).toString(16).padStart(22, "0");
 
         // Nonce
-        txHexString += tx.nonce.toString(16).padStart(6, "0");
+        // txHexString += tx.nonce.toString(16).padStart(6, "0");
 
         // Signature
         txHexString += tx.signature.r.padStart(64, "0") +
@@ -80,6 +81,7 @@ class Transaction {
     }
 
     static deserialize(tx) {  
+
         let txHexString = Buffer.from(tx).toString("hex");
 
         const txObj = { signature: {}, additionalData: {} };
@@ -93,8 +95,8 @@ class Transaction {
         txObj.gas = BigInt("0x" + txHexString.slice(0, 22)).toString();
         txHexString = txHexString.slice(22);
 
-        txObj.nonce = parseInt("0x" + txHexString.slice(0, 6));
-        txHexString = txHexString.slice(6);
+        // txObj.nonce = parseInt("0x" + txHexString.slice(0, 6));
+        // txHexString = txHexString.slice(6);
 
         txObj.signature.r = txHexString.slice(0, 64);
         txHexString = txHexString.slice(64);
@@ -135,18 +137,18 @@ class Transaction {
             tx.recipient.padStart(64, "0")    +
             tx.amount                         +
             tx.gas                            +
-            JSON.stringify(tx.additionalData) +
-            tx.nonce.toString()
+            JSON.stringify(tx.additionalData) 
+            // tx.nonce.toString()
         )
     }
 
     static sign(transaction, keyPair) {
+        // Transaction Hash: 834cd424263cfd1503c40bc0cba86b0b4b19eee577184bf9a4d481e89ff8eb17
         const sigObj = keyPair.sign(Transaction.getHash(transaction));
-        
         transaction.signature = {
-            v: sigObj.recoveryParam.toString(16),
-            r: sigObj.r.toString(16),
-            s: sigObj.s.toString(16)
+            v: sigObj.recoveryParam.toString(16), // Tham số khôi phục của ECDSA
+            r: sigObj.r.toString(16), // Tọa độ x của điểm kết quả trong ESDCA
+            s: sigObj.s.toString(16) // Giá trị của chữ ký ESDCA
         };
     }
 
@@ -179,12 +181,14 @@ class Transaction {
         } catch (e) {
             return false;
         }
-        
+
         const txSenderAddress = SHA256(txSenderPubkey);
 
         // If sender does not exist return false
-        if (!(await stateDB.keys().all()).includes(txSenderAddress)) return false;
-
+        if (!(await stateDB.keys().all()).includes(txSenderAddress)) {
+            console.log(`Address ${txSenderAddress} is not in state!`);
+            return false;
+        }
         // Fetch sender's state object
         const dataFromSender = deserializeState(await stateDB.get(txSenderAddress));
 
