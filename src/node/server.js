@@ -128,26 +128,14 @@ async function startServer(options) {
             return;
           }
 
-          if (
-            newBlock.parentHash !== chainInfo.latestBlock.parentHash &&
-            (!ENABLE_CHAIN_REQUEST ||
-              (ENABLE_CHAIN_REQUEST && currentSyncBlock > 1))
+          if (newBlock.parentHash !== chainInfo.latestBlock.parentHash && 
+            (!ENABLE_CHAIN_REQUEST || (ENABLE_CHAIN_REQUEST && currentSyncBlock > 1))
             // Only proceed if syncing is disabled or enabled but already synced at least the genesis block
           ) {
             chainInfo.checkedBlock[newBlock.hash] = true;
 
-            if (
-              await verifyBlock(
-                newBlock,
-                chainInfo,
-                stateDB,
-                codeDB,
-                ENABLE_LOGGING
-              )
-            ) {
-              console.log(
-                `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] New block received.`
-              );
+            if (await verifyBlock(newBlock, chainInfo, stateDB, codeDB,ENABLE_LOGGING)) {
+              console.log( `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] New block received.`);
 
               // If mining is enabled, we will set mined to true, informing that another node has mined before us.
               if (ENABLE_MINING) {
@@ -160,45 +148,24 @@ async function startServer(options) {
 
               // await updateDifficulty(newBlock, chainInfo, blockDB); // Update difficulty
 
-              await blockDB.put(
-                newBlock.blockNumber.toString(),
-                Buffer.from(_message.data)
-              ); // Add block to chain
-              await bhashDB.put(
-                newBlock.hash,
-                numToBuffer(newBlock.blockNumber)
+              await blockDB.put(newBlock.blockNumber.toString(), Buffer.from(_message.data)); // Add block to chain
+              await bhashDB.put(newBlock.hash, numToBuffer(newBlock.blockNumber)
               ); // Assign block number to the matching block hash
 
               // Apply to all txns of the block: Assign transaction index and block number to transaction hash
-              for (
-                let txIndex = 0;
-                txIndex < newBlock.transactions.length;
-                txIndex++
-              ) {
-                const tx = Transaction.deserialize(
-                  newBlock.transactions[txIndex]
-                );
+              for (let txIndex = 0; txIndex < newBlock.transactions.length; txIndex++) {
+                const tx = Transaction.deserialize(newBlock.transactions[txIndex]);
                 const txHash = Transaction.getHash(tx);
 
-                await txhashDB.put(
-                  txHash,
-                  newBlock.blockNumber.toString() + " " + txIndex.toString()
-                );
+                await txhashDB.put(txHash, newBlock.blockNumber.toString() + " " + txIndex.toString());
               }
 
               chainInfo.latestBlock = newBlock; // Update latest block cache
 
               // Update the new transaction pool (remove all the transactions that are no longer valid).
-              chainInfo.transactionPool = await clearDepreciatedTxns(
-                chainInfo,
-                stateDB
-              );
+              chainInfo.transactionPool = await clearDepreciatedTxns(chainInfo,stateDB);
 
-              console.log(
-                `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Block #${
-                  newBlock.blockNumber
-                } synced, state transited.`
-              );
+              console.log(`\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Block #${newBlock.blockNumber} synced, state transited.`);
 
               sendMessage(message, opened); // Broadcast block to other nodes
 
@@ -276,15 +243,11 @@ async function startServer(options) {
             break;
           }
 
-          const socket = opened.find(
-            (node) => node.address === requestAddress
-          ).socket; // Get socket from address
+          const socket = opened.find((node) => node.address === requestAddress).socket; // Get socket from address
 
           socket.send(produceMessage(TYPE.SEND_BLOCK, requestedBlock)); // Send block
 
-          console.log(
-            `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Sent block at position ${blockNumber} to ${requestAddress}.`
-          );
+          console.log( `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Sent block at position ${blockNumber} to ${requestAddress}.`);
 
           break;
 
@@ -307,10 +270,10 @@ async function startServer(options) {
               // But if there is, one can generate the first genesis block and we can add its hash into config,
               // we then check if the genesis block matches with the hash which is safe.
 
-              if (
-                (chainInfo.latestSyncBlock === null && (!GENESIS_HASH || GENESIS_HASH === block.hash)) || // For genesis
+              if ((chainInfo.latestSyncBlock === null && (!GENESIS_HASH || GENESIS_HASH === block.hash)) || // For genesis
                 await verifyBlock(block, chainInfo, stateDB, codeDB, ENABLE_LOGGING) // For all others
               ) {
+                console.log("SEND_BLOCK call")
                 await blockDB.put(block.blockNumber.toString(), Buffer.from(_message.data)); // Add block to chain
                 await bhashDB.put(block.hash, numToBuffer(block.blockNumber)); // Assign block number to the matching block hash
 
@@ -342,12 +305,7 @@ async function startServer(options) {
 
                 // Continue requesting the next block
                 for (const node of opened) {
-                  node.socket.send(
-                    produceMessage(TYPE.REQUEST_BLOCK, {
-                      blockNumber: currentSyncBlock,
-                      requestAddress: MY_ADDRESS,
-                    })
-                  );
+                  node.socket.send(produceMessage(TYPE.REQUEST_BLOCK, { blockNumber: currentSyncBlock,requestAddress: MY_ADDRESS,}));
                 }
 
                 return true;
@@ -379,22 +337,12 @@ async function startServer(options) {
     if ((await blockDB.keys().all()).length === 0) {
       // Initial state
 
-      await stateDB.put(
-        FIRST_ACCOUNT,
-        Buffer.from(
-          serializeState({
-            balance: INITIAL_SUPPLY,
-            codeHash: EMPTY_HASH,
-            // nonce: 0,
-            storageRoot: EMPTY_HASH,
-          })
+      await stateDB.put(FIRST_ACCOUNT, Buffer.from(
+          serializeState({balance: INITIAL_SUPPLY, codeHash: EMPTY_HASH, storageRoot: EMPTY_HASH})
         )
       );
 
-      await blockDB.put(
-        chainInfo.latestBlock.blockNumber.toString(),
-        Buffer.from(Block.serialize(chainInfo.latestBlock))
-      );
+      await blockDB.put( chainInfo.latestBlock.blockNumber.toString(), Buffer.from(Block.serialize(chainInfo.latestBlock)));
       await bhashDB.put(
         chainInfo.latestBlock.hash,
         numToBuffer(chainInfo.latestBlock.blockNumber)
@@ -412,13 +360,7 @@ async function startServer(options) {
 
       await changeState(chainInfo.latestBlock, stateDB, codeDB);
     } else {
-      chainInfo.latestBlock = Block.deserialize([
-        ...(await blockDB.get(
-          Math.max(
-            ...(await blockDB.keys().all()).map((key) => parseInt(key))
-          ).toString()
-        )),
-      ]);
+      chainInfo.latestBlock = Block.deserialize([...(await blockDB.get(Math.max(...(await blockDB.keys().all()).map((key) => parseInt(key))).toString())),]);
       // chainInfo.difficulty = chainInfo.latestBlock.difficulty;
     }
   }
@@ -432,6 +374,7 @@ async function startServer(options) {
 
   if (ENABLE_CHAIN_REQUEST) {
     const blockNumbers = await blockDB.keys().all();
+    console.log(`Blocknumber ${blockNumbers}`)
 
     if (blockNumbers.length !== 0) {
       currentSyncBlock = Math.max(...blockNumbers.map((key) => parseInt(key)));
@@ -439,28 +382,13 @@ async function startServer(options) {
 
     if (currentSyncBlock === 1) {
       // Initial state
-
-      await stateDB.put(
-        FIRST_ACCOUNT,
-        Buffer.from(
-          serializeState({
-            balance: INITIAL_SUPPLY,
-            codeHash: EMPTY_HASH,
-            // nonce: 0,
-            storageRoot: EMPTY_HASH,
-          })
-        )
-      );
+      await stateDB.put(FIRST_ACCOUNT, Buffer.from(serializeState({balance: INITIAL_SUPPLY,codeHash: EMPTY_HASH,storageRoot: EMPTY_HASH})));
     }
 
     setTimeout(async () => {
+      // Need to connect with other peers to run case TYPE.REQUEST_BLOCK 
       for (const node of opened) {
-        node.socket.send(
-          produceMessage(TYPE.REQUEST_BLOCK, {
-            blockNumber: currentSyncBlock,
-            requestAddress: MY_ADDRESS,
-          })
-        );
+        node.socket.send(produceMessage(TYPE.REQUEST_BLOCK, {blockNumber: currentSyncBlock,requestAddress: MY_ADDRESS,}));
       }
     }, 5000);
   }
