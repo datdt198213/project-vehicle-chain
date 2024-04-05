@@ -244,9 +244,7 @@ async function startServer(options) {
           }
 
           const socket = opened.find((node) => node.address === requestAddress).socket; // Get socket from address
-
           socket.send(produceMessage(TYPE.SEND_BLOCK, requestedBlock)); // Send block
-
           console.log( `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Sent block at position ${blockNumber} to ${requestAddress}.`);
 
           break;
@@ -261,15 +259,15 @@ async function startServer(options) {
             return;
           }
 
+          // If latest synced block is null, we immediately add the block into the chain without verification.
+          // This happens due to the fact that the genesis block can discard every possible set rule ¯\_(ツ)_/¯
+
+          // But wait, isn't that unsafe? Well, this is because we don't have an official JeChain "network" yet.
+          // But if there is, one can generate the first genesis block and we can add its hash into config,
+          // we then check if the genesis block matches with the hash which is safe.
           if (ENABLE_CHAIN_REQUEST && block.blockNumber === currentSyncBlock) {
             const verificationHandler = async function (block) {
-              // If latest synced block is null, we immediately add the block into the chain without verification.
-              // This happens due to the fact that the genesis block can discard every possible set rule ¯\_(ツ)_/¯
-
-              // But wait, isn't that unsafe? Well, this is because we don't have an official JeChain "network" yet.
-              // But if there is, one can generate the first genesis block and we can add its hash into config,
-              // we then check if the genesis block matches with the hash which is safe.
-
+              
               if ((chainInfo.latestSyncBlock === null && (!GENESIS_HASH || GENESIS_HASH === block.hash)) || // For genesis
                 await verifyBlock(block, chainInfo, stateDB, codeDB, ENABLE_LOGGING) // For all others
               ) {
@@ -287,20 +285,15 @@ async function startServer(options) {
 
                 if (!chainInfo.latestSyncBlock) {
                   chainInfo.latestSyncBlock = block; // Update latest synced block.
-
                   await changeState(block, stateDB, codeDB, ENABLE_LOGGING); // Force transit state
                 }
 
                 chainInfo.latestBlock = block; // Update latest block cache
-
+                console.log(`\x1b[32mLOG\x1b[0m [${(new Date()).toISOString()}] Synced block at position ${block.blockNumber}.`);
                 // await updateDifficulty(block, chainInfo, blockDB); // Update difficulty
 
-                console.log(`\x1b[32mLOG\x1b[0m [${(new Date()).toISOString()}] Synced block at position ${block.blockNumber}.`);
-
                 chainInfo.syncing = false;
-                // Wipe sync queue
-                chainInfo.syncQueue.wipe();
-
+                chainInfo.syncQueue.wipe(); // Wipe sync queue
                 currentSyncBlock++;
 
                 // Continue requesting the next block
@@ -374,8 +367,8 @@ async function startServer(options) {
 
   if (ENABLE_CHAIN_REQUEST) {
     const blockNumbers = await blockDB.keys().all();
-    console.log(`Blocknumber ${blockNumbers}`)
 
+    // Get the last block in stateDB to synchronize
     if (blockNumbers.length !== 0) {
       currentSyncBlock = Math.max(...blockNumbers.map((key) => parseInt(key)));
     }
@@ -388,7 +381,9 @@ async function startServer(options) {
     setTimeout(async () => {
       // Need to connect with other peers to run case TYPE.REQUEST_BLOCK 
       for (const node of opened) {
-        node.socket.send(produceMessage(TYPE.REQUEST_BLOCK, {blockNumber: currentSyncBlock,requestAddress: MY_ADDRESS,}));
+        console.log("Check connection between 2 nodes")
+        // Send message REQUEST_BLOCK for others
+        node.socket.send(produceMessage(TYPE.REQUEST_BLOCK, {blockNumber: currentSyncBlock, requestAddress: MY_ADDRESS,}));
       }
     }, 5000);
   }
@@ -494,32 +489,25 @@ async function mine(publicKey, ENABLE_LOGGING) {
   );
 
   // Collect a list of transactions to mine
-  const transactionsToMine = [],
-    states = {},
-    code = {},
-    storage = {},
-    skipped = {};
-    let totalContractGas = 0n,
-    totalTxGas = 0n;
+  const transactionsToMine = [];
+  const  states = {};
+  const code = {};
+  const storage = {};
+  const skipped = {};
+  const totalTxGas = 0n;
+  let totalContractGas = 0n;
 
   const existedAddresses = await stateDB.keys().all();
 
   for (const tx of chainInfo.transactionPool) {
-    if (
-      totalContractGas + BigInt(tx.additionalData.contractGas || 0) >=
-      BigInt(BLOCK_GAS_LIMIT)
-    )
-      break;
+    if (totalContractGas + BigInt(tx.additionalData.contractGas || 0) >= BigInt(BLOCK_GAS_LIMIT)) break;
 
     const txSenderPubkey = Transaction.getPubKey(tx);
     const txSenderAddress = SHA256(txSenderPubkey);
 
     if (skipped[txSenderAddress]) continue; // Check if transaction is from an ignored address.
 
-    const totalAmountToPay =
-      BigInt(tx.amount) +
-      BigInt(tx.gas) +
-      BigInt(tx.additionalData.contractGas || 0);
+    const totalAmountToPay = BigInt(tx.amount) + BigInt(tx.gas) + BigInt(tx.additionalData.contractGas || 0);
 
     // Normal coin transfers
     if (!states[txSenderAddress]) {
@@ -528,44 +516,23 @@ async function mine(publicKey, ENABLE_LOGGING) {
       states[txSenderAddress] = senderState;
       code[senderState.codeHash] = await codeDB.get(senderState.codeHash);
 
-      if (
-        senderState.codeHash !== EMPTY_HASH ||
-        BigInt(senderState.balance) < totalAmountToPay
-      ) {
+      if (senderState.codeHash !== EMPTY_HASH || BigInt(senderState.balance) < totalAmountToPay) {
         skipped[txSenderAddress] = true;
         continue;
       }
 
-      states[txSenderAddress].balance = (
-        BigInt(senderState.balance) -
-        BigInt(tx.amount) -
-        BigInt(tx.gas) -
-        BigInt(tx.additionalData.contractGas || 0)
-      ).toString();
+      states[txSenderAddress].balance = (BigInt(senderState.balance) - BigInt(tx.amount) - BigInt(tx.gas) - BigInt(tx.additionalData.contractGas || 0)).toString();
     } else {
-      if (
-        states[txSenderAddress].codeHash !== EMPTY_HASH ||
-        BigInt(states[txSenderAddress].balance) < totalAmountToPay
-      ) {
+      if (states[txSenderAddress].codeHash !== EMPTY_HASH || BigInt(states[txSenderAddress].balance) < totalAmountToPay) {
         skipped[txSenderAddress] = true;
         continue;
       }
 
-      states[txSenderAddress].balance = (
-        BigInt(states[txSenderAddress].balance) -
-        BigInt(tx.amount) -
-        BigInt(tx.gas) -
-        BigInt(tx.additionalData.contractGas || 0)
-      ).toString();
+      states[txSenderAddress].balance = (BigInt(states[txSenderAddress].balance) - BigInt(tx.amount) - BigInt(tx.gas) - BigInt(tx.additionalData.contractGas || 0)).toString();
     }
 
     if (!existedAddresses.includes(tx.recipient) && !states[tx.recipient]) {
-      states[tx.recipient] = {
-        balance: "0",
-        codeHash: EMPTY_HASH,
-        nonce: 0,
-        storageRoot: EMPTY_HASH,
-      };
+      states[tx.recipient] = {balance: "0", codeHash: EMPTY_HASH, storageRoot: EMPTY_HASH,};
       code[EMPTY_HASH] = "";
     }
 
@@ -576,15 +543,10 @@ async function mine(publicKey, ENABLE_LOGGING) {
       );
     }
 
-    states[tx.recipient].balance = (
-      BigInt(states[tx.recipient].balance) + BigInt(tx.amount)
-    ).toString();
+    states[tx.recipient].balance = (BigInt(states[tx.recipient].balance) + BigInt(tx.amount)).toString();
 
     // Contract deployment
-    if (
-      states[txSenderAddress].codeHash === EMPTY_HASH &&
-      typeof tx.additionalData.scBody === "string"
-    ) {
+    if (states[txSenderAddress].codeHash === EMPTY_HASH && typeof tx.additionalData.scBody === "string") {
       states[txSenderAddress].codeHash = SHA256(tx.additionalData.scBody);
       code[states[txSenderAddress].codeHash] = tx.additionalData.scBody;
     }
@@ -607,16 +569,7 @@ async function mine(publicKey, ENABLE_LOGGING) {
     if (states[tx.recipient].codeHash !== EMPTY_HASH) {
       const contractInfo = { address: tx.recipient };
 
-      const [newState, newStorage] = await jelscript(
-        code[states[tx.recipient].codeHash],
-        states,
-        BigInt(tx.additionalData.contractGas || 0),
-        stateDB,
-        block,
-        tx,
-        contractInfo,
-        false
-      );
+      const [newState, newStorage] = await jelscript(code[states[tx.recipient].codeHash], states, BigInt(tx.additionalData.contractGas || 0), stateDB, block, tx, contractInfo, false);
 
       for (const account of Object.keys(newState)) {
         states[account] = newState[account];
