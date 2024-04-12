@@ -1,15 +1,15 @@
 {
-    "PORT": 10500,
-    "MY_ADDRESS": "a8029784caa3879169deb69d725a8106e7eb34cce99ced2f4cac99fbc7f76608",
+    "PORT": 10510,
+    "MY_ADDRESS": "ws://172.20.10.9:10510",
 
     "RPC_PORT": 20297,
-    "PEERS": [],
+    "PEERS": ["ws://172.20.10.6:10501"],
     "MAX_PEERS": 10,
     
-    "PRIVATE_KEY": "bfd031695d7263b2c9948f17f88a02513c33e1f3298c260f3d1712f936b34b0e",
+    "PRIVATE_KEY": "8d0f29a6d99470d309d3ded8849d43bb67610f32a3bcd4269e8efa6132c095cb",
     
     "ENABLE_MINING": true,
     "ENABLE_LOGGING": true,
     "ENABLE_RPC": true,
-    "ENABLE_CHAIN_REQUEST": false
+    "ENABLE_CHAIN_REQUEST": true
 }
