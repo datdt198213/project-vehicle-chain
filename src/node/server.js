@@ -110,6 +110,7 @@ async function startServer(options) {
           // Its message body must contain the new block and the new difficulty.
 
           let newBlock;
+          console.log("New Block call")
 
           try {
             newBlock = Block.deserialize(_message.data);
@@ -118,6 +119,9 @@ async function startServer(options) {
 
             return;
           }
+
+          console.log(newBlock)
+          // console.log(chainInfo.checkedBlock[newBlock.hash])
 
           // We will only continue checking the block if its parentHash is not the same as the latest block's hash.
           // This is because the block sent to us is likely duplicated or from a node that has lost and should be discarded.
@@ -148,6 +152,7 @@ async function startServer(options) {
 
               // await updateDifficulty(newBlock, chainInfo, blockDB); // Update difficulty
 
+              console.log(`NEW_BLOCK call ${newBlock.blockNumber}`)
               await blockDB.put(newBlock.blockNumber.toString(), Buffer.from(_message.data)); // Add block to chain
               await bhashDB.put(newBlock.hash, numToBuffer(newBlock.blockNumber)
               ); // Assign block number to the matching block hash
@@ -233,12 +238,15 @@ async function startServer(options) {
 
         case TYPE.REQUEST_BLOCK:
           const { blockNumber, requestAddress } = _message.data;
-
           let requestedBlock;
-
+          
+          
           try {
             requestedBlock = [...(await blockDB.get(blockNumber.toString()))]; // Get block
-          } catch (e) {
+          } catch (err) {
+            if (err.notFound) {
+              console.error(`Block number not found in blockDB: ${blockNumber}`);
+            }
             // If block does not exist, break
             break;
           }
@@ -251,7 +259,7 @@ async function startServer(options) {
 
         case TYPE.SEND_BLOCK:
           let block;
-
+          console.log(`Send block call`)
           try {
             block = Block.deserialize(_message.data);
           } catch (e) {
@@ -271,7 +279,6 @@ async function startServer(options) {
               if ((chainInfo.latestSyncBlock === null && (!GENESIS_HASH || GENESIS_HASH === block.hash)) || // For genesis
                 await verifyBlock(block, chainInfo, stateDB, codeDB, ENABLE_LOGGING) // For all others
               ) {
-                console.log("SEND_BLOCK call")
                 await blockDB.put(block.blockNumber.toString(), Buffer.from(_message.data)); // Add block to chain
                 await bhashDB.put(block.hash, numToBuffer(block.blockNumber)); // Assign block number to the matching block hash
 
@@ -330,16 +337,10 @@ async function startServer(options) {
     if ((await blockDB.keys().all()).length === 0) {
       // Initial state
 
-      await stateDB.put(FIRST_ACCOUNT, Buffer.from(
-          serializeState({balance: INITIAL_SUPPLY, codeHash: EMPTY_HASH, storageRoot: EMPTY_HASH})
-        )
-      );
+      await stateDB.put(FIRST_ACCOUNT, Buffer.from(serializeState({balance: INITIAL_SUPPLY, codeHash: EMPTY_HASH, storageRoot: EMPTY_HASH})));
 
-      await blockDB.put( chainInfo.latestBlock.blockNumber.toString(), Buffer.from(Block.serialize(chainInfo.latestBlock)));
-      await bhashDB.put(
-        chainInfo.latestBlock.hash,
-        numToBuffer(chainInfo.latestBlock.blockNumber)
-      ); // Assign block number to the matching block hash
+      await blockDB.put(chainInfo.latestBlock.blockNumber.toString(), Buffer.from(Block.serialize(chainInfo.latestBlock)));
+      await bhashDB.put(chainInfo.latestBlock.hash, numToBuffer(chainInfo.latestBlock.blockNumber)); // Assign block number to the matching block hash
 
       console.log(
         `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Created Genesis Block with:\n` +
@@ -365,23 +366,32 @@ async function startServer(options) {
   // Sync chain
   let currentSyncBlock = 1;
 
+
   if (ENABLE_CHAIN_REQUEST) {
-    const blockNumbers = await blockDB.keys().all();
+    
+    // const blockNumbers = await blockDB.keys().all();
+    const blockNumbers = chainInfo.latestBlock.blockNumber;
+    console.log(`block number ${blockNumbers}`)
 
     // Get the last block in stateDB to synchronize
     if (blockNumbers.length !== 0) {
-      currentSyncBlock = Math.max(...blockNumbers.map((key) => parseInt(key)));
+      // currentSyncBlock = Math.max(...blockNumbers.map((key) => parseInt(key)));
+      currentSyncBlock = 1;
     }
 
     if (currentSyncBlock === 1) {
+      console.log("Current sync block call")
       // Initial state
       await stateDB.put(FIRST_ACCOUNT, Buffer.from(serializeState({balance: INITIAL_SUPPLY,codeHash: EMPTY_HASH,storageRoot: EMPTY_HASH})));
+
+      await blockDB.put(chainInfo.latestBlock.blockNumber.toString(), Buffer.from(Block.serialize(chainInfo.latestBlock)));
+      await bhashDB.put(chainInfo.latestBlock.hash, numToBuffer(chainInfo.latestBlock.blockNumber)); // Assign block number to the matching block hash
+      // await changeState(chainInfo.latestBlock, stateDB, codeDB);
     }
 
     setTimeout(async () => {
       // Need to connect with other peers to run case TYPE.REQUEST_BLOCK 
       for (const node of opened) {
-        console.log("Check connection between 2 nodes")
         // Send message REQUEST_BLOCK for others
         node.socket.send(produceMessage(TYPE.REQUEST_BLOCK, {blockNumber: currentSyncBlock, requestAddress: MY_ADDRESS,}));
       }
@@ -396,6 +406,13 @@ async function startServer(options) {
   // const transaction1 = new Transaction("04324ae590b69c924fce7383f777c62868ce8a5deb23df58adb882f1c8d4e9cfa77e57a8a72832213bfbc6b641f42c492b638ae723e894db0463ddb3c8595f234b", 300, 200, {contractGas: 20})
   // Transaction.sign(transaction1, keyPair)
   // await sendTransaction(transaction1)
+
+  // const myContract = ``;
+  // const transaction = new Transaction("contract address", amount, gas, {
+  //   scBody: myContract
+  // });
+  // Transaction.sign(transaction, keyPair);
+  // sendTransaction(transaction);
   
   if (ENABLE_MINING) loopMine(publicKey, ENABLE_CHAIN_REQUEST, ENABLE_LOGGING);
   if (ENABLE_RPC) rpc(RPC_PORT, { publicKey, mining: ENABLE_MINING, chainInfo }, sendTransaction, keyPair, stateDB, blockDB, bhashDB, codeDB, txhashDB);
@@ -433,18 +450,14 @@ function connect(MY_ADDRESS, address) {
 
         connectedNodes++;
 
-        console.log(
-          `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Connected to ${address}.`
-        );
+        console.log(`\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Connected to ${address}.`);
 
         // Listen for disconnection, will remove them from "opened" and "connected".
         socket.on("close", () => {
           opened.splice(connected.indexOf(address), 1);
           connected.splice(connected.indexOf(address), 1);
 
-          console.log(
-            `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Disconnected from ${address}.`
-          );
+          console.log(`\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Disconnected from ${address}.`);
         });
       }
     });
@@ -458,10 +471,7 @@ async function sendTransaction(transaction) {
   sendMessage(produceMessage(TYPE.CREATE_TRANSACTION, transaction), opened);
   // console.log(transaction);
 
-  console.log(
-    `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Sent one transaction.`
-  );
-
+  console.log(`\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Sent one transaction.`);
 
   await addTransaction(transaction, chainInfo, stateDB);
 }
@@ -479,22 +489,22 @@ async function mine(publicKey, ENABLE_LOGGING) {
 
   // Block(blockNumber = 1, timestamp = Date.now(), transactions = [], parentHash = "",coinbase = "")
   // Create a new block.
-  const block = new Block(
-    chainInfo.latestBlock.blockNumber + 1,
+  const block = new Block(chainInfo.latestBlock.blockNumber + 1,
     Date.now(),
     [], // Will add transactions down here
     // chainInfo.difficulty,
     chainInfo.latestBlock.hash,
     SHA256(publicKey)
   );
-
+  console.log(block)
+  
   // Collect a list of transactions to mine
   const transactionsToMine = [];
   const  states = {};
   const code = {};
   const storage = {};
   const skipped = {};
-  const totalTxGas = 0n;
+  let totalTxGas = 0n;
   let totalContractGas = 0n;
 
   const existedAddresses = await stateDB.keys().all();
@@ -511,6 +521,7 @@ async function mine(publicKey, ENABLE_LOGGING) {
 
     // Normal coin transfers
     if (!states[txSenderAddress]) {
+      
       const senderState = deserializeState(await stateDB.get(txSenderAddress));
 
       states[txSenderAddress] = senderState;
@@ -538,9 +549,7 @@ async function mine(publicKey, ENABLE_LOGGING) {
 
     if (existedAddresses.includes(tx.recipient) && !states[tx.recipient]) {
       states[tx.recipient] = deserializeState(await stateDB.get(tx.recipient));
-      code[states[tx.recipient].codeHash] = await codeDB.get(
-        states[tx.recipient].codeHash
-      );
+      code[states[tx.recipient].codeHash] = await codeDB.get(states[tx.recipient].codeHash);
     }
 
     states[tx.recipient].balance = (BigInt(states[tx.recipient].balance) + BigInt(tx.amount)).toString();
@@ -581,9 +590,7 @@ async function mine(publicKey, ENABLE_LOGGING) {
 
   const transactionsAsObj = [...transactionsToMine];
 
-  block.transactions = transactionsToMine.map((tx) =>
-    Transaction.serialize(tx)
-  ); // Add transactions to block
+  block.transactions = transactionsToMine.map((tx) => Transaction.serialize(tx)); // Add transactions to block
   block.hash = Block.getHash(block); // Re-hash with new transactions
   block.txRoot = Merkle.buildTxTrie(transactionsAsObj).root; // Re-gen transaction root with new transactions
 
@@ -594,11 +601,12 @@ async function mine(publicKey, ENABLE_LOGGING) {
       if (!mined) {
         // await updateDifficulty(result, chainInfo, blockDB); // Update difficulty
 
-        console.log("Mine's called")
         // console.log(result.blockNumber)
         // console.log(result.timestamp)
         // console.log(result.txRoot)
         // console.log(result.hash)
+        console.log("Mine call")
+        console.log(Buffer.from(Block.serialize(result)));
 
         await blockDB.put(result.blockNumber.toString(), Buffer.from(Block.serialize(result))); // Add block to chain
         await bhashDB.put(result.hash, numToBuffer(result.blockNumber)); // Assign block number to the matching block hash
@@ -614,26 +622,14 @@ async function mine(publicKey, ENABLE_LOGGING) {
         chainInfo.latestBlock = result; // Update latest block cache
 
         // Reward
-        if (!existedAddresses.includes(result.coinbase) &&
-          !states[result.coinbase]) {
-          states[result.coinbase] = {
-            balance: "0",
-            codeHash: EMPTY_HASH,
-            storageRoot: EMPTY_HASH,
-          };
+        if (!existedAddresses.includes(result.coinbase) && !states[result.coinbase]) {
+          states[result.coinbase] = {balance: "0", codeHash: EMPTY_HASH, storageRoot: EMPTY_HASH,};
           code[EMPTY_HASH] = "";
         }
 
-        if (
-          existedAddresses.includes(result.coinbase) &&
-          !states[result.coinbase]
-        ) {
-          states[result.coinbase] = deserializeState(
-            await stateDB.get(result.coinbase)
-          );
-          code[states[result.coinbase].codeHash] = await codeDB.get(
-            states[result.coinbase].codeHash
-          );
+        if (existedAddresses.includes(result.coinbase) && !states[result.coinbase]) {
+          states[result.coinbase] = deserializeState(await stateDB.get(result.coinbase));
+          code[states[result.coinbase].codeHash] = await codeDB.get(states[result.coinbase].codeHash);
         }
 
         let gas = 0n;
@@ -642,23 +638,14 @@ async function mine(publicKey, ENABLE_LOGGING) {
           gas += BigInt(tx.gas) + BigInt(tx.additionalData.contractGas || 0);
         }
 
-        states[result.coinbase].balance = (
-          BigInt(states[result.coinbase].balance) +
-          BigInt(BLOCK_REWARD) +
-          gas
-        ).toString();
+        states[result.coinbase].balance = (BigInt(states[result.coinbase].balance) + BigInt(BLOCK_REWARD) + gas).toString();
 
         // Transit state
         for (const address in storage) {
-          const storageDB = new Level(
-            __dirname + "/../../log/accountStore/" + address
-          );
+          const storageDB = new Level(__dirname + "/../../log/accountStore/" + address);
           const keys = Object.keys(storage[address]);
 
-          states[address].storageRoot = Merkle.buildTxTrie(
-            keys.map((key) => key + " " + storage[address][key]),
-            false
-          ).root;
+          states[address].storageRoot = Merkle.buildTxTrie(keys.map((key) => key + " " + storage[address][key]), false).root;
 
           for (const key of keys) {
             await storageDB.put(key, storage[address][key]);
@@ -668,36 +655,17 @@ async function mine(publicKey, ENABLE_LOGGING) {
         }
 
         for (const account of Object.keys(states)) {
-          await stateDB.put(
-            account,
-            Buffer.from(serializeState(states[account]))
-          );
+          await stateDB.put(account, Buffer.from(serializeState(states[account])));
 
-          await codeDB.put(
-            states[account].codeHash,
-            code[states[account].codeHash]
-          );
+          await codeDB.put(states[account].codeHash, code[states[account].codeHash]);
         }
 
         // Update the new transaction pool (remove all the transactions that are no longer valid).
-        chainInfo.transactionPool = await clearDepreciatedTxns(
-          chainInfo,
-          stateDB
-        );
+        chainInfo.transactionPool = await clearDepreciatedTxns(chainInfo, stateDB);
 
-        sendMessage(
-          produceMessage(
-            TYPE.NEW_BLOCK,
-            Block.serialize(chainInfo.latestBlock)
-          ),
-          opened
-        ); // Broadcast the new block
+        sendMessage(produceMessage(TYPE.NEW_BLOCK, Block.serialize(chainInfo.latestBlock)), opened); // Broadcast the new block
 
-        console.log(
-          `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Block #${
-            chainInfo.latestBlock.blockNumber
-          } mined and synced, state transited.`
-        );
+        console.log(`\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Block #${chainInfo.latestBlock.blockNumber} mined and synced, state transited.`);
         
       } else {
         mined = false;
@@ -708,21 +676,11 @@ async function mine(publicKey, ENABLE_LOGGING) {
 
       worker = fork(`${__dirname}/../miner/worker.js`);
     })
-    .catch((err) =>
-      console.log(
-        `\x1b[31mERROR\x1b[0m [${new Date().toISOString()}] Error at mining child process`,
-        err
-      )
-    );
+    .catch((err) => console.log(`\x1b[31mERROR\x1b[0m [${new Date().toISOString()}] Error at mining child process`, err));
 }
 
 // Function to mine continuously
-function loopMine(
-  publicKey,
-  ENABLE_CHAIN_REQUEST,
-  ENABLE_LOGGING,
-  time = 1000
-) {
+function loopMine(publicKey, ENABLE_CHAIN_REQUEST, ENABLE_LOGGING, time = 10000) {
   let length = chainInfo.latestBlock.blockNumber;
   let mining = true;
 
