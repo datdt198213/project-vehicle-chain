@@ -120,7 +120,7 @@ async function startServer(options) {
             return;
           }
 
-          console.log(newBlock)
+          // console.log(newBlock)
           // console.log(chainInfo.checkedBlock[newBlock.hash])
 
           // We will only continue checking the block if its parentHash is not the same as the latest block's hash.
@@ -139,7 +139,7 @@ async function startServer(options) {
             chainInfo.checkedBlock[newBlock.hash] = true;
 
             if (await verifyBlock(newBlock, chainInfo, stateDB, codeDB,ENABLE_LOGGING)) {
-              console.log( `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] New block received.`);
+              console.log( `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] New block ${newBlock.blockNumber} received.`);
 
               // If mining is enabled, we will set mined to true, informing that another node has mined before us.
               if (ENABLE_MINING) {
@@ -152,7 +152,6 @@ async function startServer(options) {
 
               // await updateDifficulty(newBlock, chainInfo, blockDB); // Update difficulty
 
-              console.log(`NEW_BLOCK call ${newBlock.blockNumber}`)
               await blockDB.put(newBlock.blockNumber.toString(), Buffer.from(_message.data)); // Add block to chain
               await bhashDB.put(newBlock.hash, numToBuffer(newBlock.blockNumber)
               ); // Assign block number to the matching block hash
@@ -275,10 +274,12 @@ async function startServer(options) {
           // we then check if the genesis block matches with the hash which is safe.
           if (ENABLE_CHAIN_REQUEST && block.blockNumber === currentSyncBlock) {
             const verificationHandler = async function (block) {
+            console.log('verifyHandler')
               
               if ((chainInfo.latestSyncBlock === null && (!GENESIS_HASH || GENESIS_HASH === block.hash)) || // For genesis
                 await verifyBlock(block, chainInfo, stateDB, codeDB, ENABLE_LOGGING) // For all others
               ) {
+                console.log('verifyBlock')
                 await blockDB.put(block.blockNumber.toString(), Buffer.from(_message.data)); // Add block to chain
                 await bhashDB.put(block.hash, numToBuffer(block.blockNumber)); // Assign block number to the matching block hash
 
@@ -321,7 +322,7 @@ async function startServer(options) {
 
         case TYPE.HANDSHAKE:
           const address = _message.data;
-
+          console.log('Handshake call')
           if (connectedNodes <= MAX_PEERS) {
             try {
               connect(MY_ADDRESS, address);
@@ -368,15 +369,15 @@ async function startServer(options) {
 
 
   if (ENABLE_CHAIN_REQUEST) {
-    
-    // const blockNumbers = await blockDB.keys().all();
-    const blockNumbers = chainInfo.latestBlock.blockNumber;
-    console.log(`block number ${blockNumbers}`)
+    console.log('Enable chain request')
+    const blockNumbers = await blockDB.keys().all();
+    // const blockNumbers = chainInfo.latestBlock.blockNumber;
+    // console.log(`block number ${blockNumbers}`)
 
     // Get the last block in stateDB to synchronize
     if (blockNumbers.length !== 0) {
-      // currentSyncBlock = Math.max(...blockNumbers.map((key) => parseInt(key)));
-      currentSyncBlock = 1;
+      currentSyncBlock = Math.max(...blockNumbers.map((key) => parseInt(key)));
+      // currentSyncBlock = 1;
     }
 
     if (currentSyncBlock === 1) {
@@ -386,7 +387,7 @@ async function startServer(options) {
 
       await blockDB.put(chainInfo.latestBlock.blockNumber.toString(), Buffer.from(Block.serialize(chainInfo.latestBlock)));
       await bhashDB.put(chainInfo.latestBlock.hash, numToBuffer(chainInfo.latestBlock.blockNumber)); // Assign block number to the matching block hash
-      // await changeState(chainInfo.latestBlock, stateDB, codeDB);
+      await changeState(chainInfo.latestBlock, stateDB, codeDB);
     }
 
     setTimeout(async () => {
@@ -395,7 +396,7 @@ async function startServer(options) {
         // Send message REQUEST_BLOCK for others
         node.socket.send(produceMessage(TYPE.REQUEST_BLOCK, {blockNumber: currentSyncBlock, requestAddress: MY_ADDRESS,}));
       }
-    }, 5000);
+    }, 1000);
   }
 
   // Transaction(recipient = "", amount = "0", gas = "1000000000000", additionalData = {}) {
@@ -497,6 +498,7 @@ async function mine(publicKey, ENABLE_LOGGING) {
     SHA256(publicKey)
   );
   console.log(block)
+  console.log('mine working')
   
   // Collect a list of transactions to mine
   const transactionsToMine = [];
@@ -680,20 +682,20 @@ async function mine(publicKey, ENABLE_LOGGING) {
 }
 
 // Function to mine continuously
-function loopMine(publicKey, ENABLE_CHAIN_REQUEST, ENABLE_LOGGING, time = 10000) {
+function loopMine(publicKey, ENABLE_CHAIN_REQUEST, ENABLE_LOGGING, time = 2000) {
   let length = chainInfo.latestBlock.blockNumber;
   let mining = true;
 
   setInterval(async () => {
-    if (mining || length !== chainInfo.latestBlock.blockNumber) {
-      mining = false;
-      length = chainInfo.latestBlock.blockNumber;
+    // if (mining || length !== chainInfo.latestBlock.blockNumber) {
+    //   mining = false;
+    //   length = chainInfo.latestBlock.blockNumber;
 
-      if (!ENABLE_CHAIN_REQUEST) await mine(publicKey, ENABLE_LOGGING);
+    //   if (!ENABLE_CHAIN_REQUEST) await mine(publicKey, ENABLE_LOGGING);
       
       console.log(chainInfo)
 
-    }
+    // }
   }, time);
 }
 
