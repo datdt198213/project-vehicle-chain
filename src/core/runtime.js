@@ -263,7 +263,7 @@ async function jelscript(input, originalState = {}, gas, stateDB, block, txInfo,
 						state[target] = {
 							balance: amount.toString(),
 							codeHash: EMPTY_HASH,
-							nonce: 0,
+							// nonce: 0,
 							storageRoot: EMPTY_HASH
 						}
 					} else {

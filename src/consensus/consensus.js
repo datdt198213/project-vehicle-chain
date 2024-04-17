@@ -31,8 +31,7 @@ async function verifyBlock(newBlock, chainInfo, stateDB, codeDB, enableLogging =
             // if( NumOfZero(Hash(nonce) >= 1000))  0 - 7, 0 - 199
             // Phí giao dịch, transaction có 0.2 coin
             // Được phép lấy các transaction từ 
-        ) === newBlock.hash &&
-        chainInfo.latestBlock.hash === newBlock.parentHash &&
+        ) === newBlock.hash && chainInfo.latestBlock.hash === newBlock.parentHash &&
         
         // Check proof of work
         // newBlock.hash.startsWith("00000" + Array(Math.floor(log16(chainInfo.difficulty)) + 1).join("0")) &&

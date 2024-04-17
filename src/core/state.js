@@ -14,6 +14,8 @@ const { serializeState, deserializeState } = require('../utils/utils');
 async function changeState(newBlock, stateDB, codeDB, enableLogging = false) { // Manually change state
     const existedAddresses = await stateDB.keys().all();
 
+    console.log(`Existed Address: ${existedAddresses}`);
+
     for (const tx of newBlock.transactions) {
         // If the address doesn't already exist in the chain state, we will create a new empty one.
         if (!existedAddresses.includes(tx.recipient)) {

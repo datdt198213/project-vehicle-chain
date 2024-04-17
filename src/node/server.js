@@ -121,7 +121,6 @@ async function startServer(options) {
           }
 
           console.log(newBlock)
-          // console.log(chainInfo.checkedBlock[newBlock.hash])
 
           // We will only continue checking the block if its parentHash is not the same as the latest block's hash.
           // This is because the block sent to us is likely duplicated or from a node that has lost and should be discarded.
@@ -152,7 +151,7 @@ async function startServer(options) {
 
               // await updateDifficulty(newBlock, chainInfo, blockDB); // Update difficulty
 
-              console.log(`NEW_BLOCK call ${newBlock.blockNumber}`)
+              // console.log(`NEW_BLOCK call ${newBlock.blockNumber}`)
               await blockDB.put(newBlock.blockNumber.toString(), Buffer.from(_message.data)); // Add block to chain
               await bhashDB.put(newBlock.hash, numToBuffer(newBlock.blockNumber)
               ); // Assign block number to the matching block hash
@@ -240,6 +239,7 @@ async function startServer(options) {
           const { blockNumber, requestAddress } = _message.data;
           let requestedBlock;
           
+          console.log(`Block number ${blockNumber}`)
           
           try {
             requestedBlock = [...(await blockDB.get(blockNumber.toString()))]; // Get block
@@ -275,6 +275,7 @@ async function startServer(options) {
           // we then check if the genesis block matches with the hash which is safe.
           if (ENABLE_CHAIN_REQUEST && block.blockNumber === currentSyncBlock) {
             const verificationHandler = async function (block) {
+              console.log("Verification call")
               
               if ((chainInfo.latestSyncBlock === null && (!GENESIS_HASH || GENESIS_HASH === block.hash)) || // For genesis
                 await verifyBlock(block, chainInfo, stateDB, codeDB, ENABLE_LOGGING) // For all others
@@ -298,7 +299,7 @@ async function startServer(options) {
                 chainInfo.latestBlock = block; // Update latest block cache
                 console.log(`\x1b[32mLOG\x1b[0m [${(new Date()).toISOString()}] Synced block at position ${block.blockNumber}.`);
                 // await updateDifficulty(block, chainInfo, blockDB); // Update difficulty
-
+                console.log(`Syncing: ${chainInfo.syncing}`)
                 chainInfo.syncing = false;
                 chainInfo.syncQueue.wipe(); // Wipe sync queue
                 currentSyncBlock++;
@@ -309,6 +310,24 @@ async function startServer(options) {
                 }
 
                 return true;
+              } else {
+                if (!chainInfo.latestSyncBlock) {
+                  chainInfo.latestSyncBlock = block; // Update latest synced block.
+                  await changeState(block, stateDB, codeDB, ENABLE_LOGGING); // Force transit state
+                }
+
+                chainInfo.latestBlock = block; // Update latest block cache
+                console.log(`\x1b[32mLOG\x1b[0m [${(new Date()).toISOString()}] Synced block at position ${block.blockNumber}.`);
+                // await updateDifficulty(block, chainInfo, blockDB); // Update difficulty
+                console.log(`Syncing: ${chainInfo.syncing}`)
+                chainInfo.syncing = false;
+                chainInfo.syncQueue.wipe(); // Wipe sync queue
+                currentSyncBlock++;
+
+                // Continue requesting the next block
+                for (const node of opened) {
+                  node.socket.send(produceMessage(TYPE.REQUEST_BLOCK, { blockNumber: currentSyncBlock,requestAddress: MY_ADDRESS,}));
+                }
               }
 
               return false;
@@ -369,33 +388,42 @@ async function startServer(options) {
 
   if (ENABLE_CHAIN_REQUEST) {
     
-    // const blockNumbers = await blockDB.keys().all();
-    const blockNumbers = chainInfo.latestBlock.blockNumber;
-    console.log(`block number ${blockNumbers}`)
+    const blockNumbers = await blockDB.keys().all();
+    // const blockNumbers = chainInfo.latestBlock.blockNumber;
 
     // Get the last block in stateDB to synchronize
     if (blockNumbers.length !== 0) {
-      // currentSyncBlock = Math.max(...blockNumbers.map((key) => parseInt(key)));
-      currentSyncBlock = 1;
+      currentSyncBlock = Math.max(...blockNumbers.map((key) => parseInt(key)));
+      // currentSyncBlock = 1;
     }
 
     if (currentSyncBlock === 1) {
       console.log("Current sync block call")
-      // Initial state
+      // Lưu trạng thái khởi tạo vào tài khoản FIRST_ACCOUNT trong database stateDB
       await stateDB.put(FIRST_ACCOUNT, Buffer.from(serializeState({balance: INITIAL_SUPPLY,codeHash: EMPTY_HASH,storageRoot: EMPTY_HASH})));
 
+      // Lưu thông tin Block hiện tại vào bản ghi có key số thứ tự của block (BlockNumber) trong database blockDB
       await blockDB.put(chainInfo.latestBlock.blockNumber.toString(), Buffer.from(Block.serialize(chainInfo.latestBlock)));
+
+      // Lưu BlockNumber của block  vào hash của block cuối cùng của chain trong database bhashDB
       await bhashDB.put(chainInfo.latestBlock.hash, numToBuffer(chainInfo.latestBlock.blockNumber)); // Assign block number to the matching block hash
-      // await changeState(chainInfo.latestBlock, stateDB, codeDB);
-    }
+
+      // Update trạng thái của chainInfo, database thay đổi là stateDB và codeDB
+      await changeState(chainInfo.latestBlock, stateDB, codeDB);
+    } 
+    
+    // if ((await blockDB.keys().all()).length !== 0) {
+    //   chainInfo.latestBlock = Block.deserialize([...(await blockDB.get(Math.max(...(await blockDB.keys().all()).map((key) => parseInt(key))).toString())),]);
+    // }
 
     setTimeout(async () => {
       // Need to connect with other peers to run case TYPE.REQUEST_BLOCK 
       for (const node of opened) {
         // Send message REQUEST_BLOCK for others
+        console.log(`Current sync block: ${currentSyncBlock}`);
         node.socket.send(produceMessage(TYPE.REQUEST_BLOCK, {blockNumber: currentSyncBlock, requestAddress: MY_ADDRESS,}));
       }
-    }, 5000);
+    }, 1000);
   }
 
   // Transaction(recipient = "", amount = "0", gas = "1000000000000", additionalData = {}) {
@@ -600,13 +628,7 @@ async function mine(publicKey, ENABLE_LOGGING) {
       // If the block is not mined before, we will add it to our chain and broadcast this new block.
       if (!mined) {
         // await updateDifficulty(result, chainInfo, blockDB); // Update difficulty
-
-        // console.log(result.blockNumber)
-        // console.log(result.timestamp)
-        // console.log(result.txRoot)
-        // console.log(result.hash)
         console.log("Mine call")
-        console.log(Buffer.from(Block.serialize(result)));
 
         await blockDB.put(result.blockNumber.toString(), Buffer.from(Block.serialize(result))); // Add block to chain
         await bhashDB.put(result.hash, numToBuffer(result.blockNumber)); // Assign block number to the matching block hash
@@ -680,20 +702,30 @@ async function mine(publicKey, ENABLE_LOGGING) {
 }
 
 // Function to mine continuously
-function loopMine(publicKey, ENABLE_CHAIN_REQUEST, ENABLE_LOGGING, time = 10000) {
+function loopMine(publicKey, ENABLE_CHAIN_REQUEST, ENABLE_LOGGING, time = 1000) {
   let length = chainInfo.latestBlock.blockNumber;
   let mining = true;
 
   setInterval(async () => {
-    if (mining || length !== chainInfo.latestBlock.blockNumber) {
-      mining = false;
-      length = chainInfo.latestBlock.blockNumber;
+    console.log(`Loop mine call`);
+    console.log("Blocknumber of latest block", chainInfo.latestBlock.blockNumber);
+    // console.log('Mining', mining)
 
-      if (!ENABLE_CHAIN_REQUEST) await mine(publicKey, ENABLE_LOGGING);
-      
-      console.log(chainInfo)
+    // if (length !== chainInfo.latestBlock.blockNumber) {
+      await mine(publicKey, ENABLE_LOGGING);
+    // }
+    console.log(chainInfo)
 
-    }
+    // if (mining || length !== chainInfo.latestBlock.blockNumber) {
+    //   mining = false;
+    //   length = chainInfo.latestBlock.blockNumber;
+
+    //   if (!ENABLE_CHAIN_REQUEST) await mine(publicKey, ENABLE_LOGGING);
+
+    //   // console.log(`Chain info in loop Mine`);
+    //   console.log(chainInfo)
+
+    // }
   }, time);
 }
 

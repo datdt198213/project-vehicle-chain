@@ -13,24 +13,19 @@ const { BLOCK_GAS_LIMIT } = require("../config.json");
 const { deserializeState, serializeState } = require("../utils/utils");
 
 async function addTransaction(transaction, chainInfo, stateDB) {
-  // try {
-  //     transaction = Transaction.deserialize(transaction);
-  // } catch (e) {
-  //     console.log(`\x1b[31mERROR\x1b[0m [${(new Date()).toISOString()}] Failed to add one transaction to pool: Can not deserialize transaction.`);
+  try {
+      transaction = Transaction.deserialize(transaction);
+  } catch (e) {
+    console.log(`\x1b[31mERROR\x1b[0m [${(new Date()).toISOString()}] Failed to add one transaction to pool: Can not deserialize transaction.`);
 
-  //     // If transaction can not be deserialized, it's faulty
-  //     return;
-  // }
+    // If transaction can not be deserialized, it's faulty
+    return;
+  }
 
+  console.log(transaction)
   // Transactions are weakly verified when added to the pool (does no state checking), but will be fully checked in block production.
-  if (
-    !(await Transaction.isValid(transaction, stateDB)) ||
-    BigInt(transaction.additionalData.contractGas || 0) >
-      BigInt(BLOCK_GAS_LIMIT)
-  ) {
-    console.log(
-      `\x1b[31mERROR\x1b[0m [${new Date().toISOString()}] Failed to add one transaction to pool: Transaction is invalid.`
-    );
+  if (!(await Transaction.isValid(transaction, stateDB)) || BigInt(transaction.additionalData.contractGas || 0) > BigInt(BLOCK_GAS_LIMIT)) {
+    console.log(`\x1b[31mERROR\x1b[0m [${new Date().toISOString()}] Failed to add one transaction to pool: Transaction is invalid.`);
 
     return;
   }
@@ -71,9 +66,7 @@ async function addTransaction(transaction, chainInfo, stateDB) {
 
   txPool.push(transaction);
 
-  console.log(
-    `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Added one transaction to pool.`
-  );
+  console.log(`\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Added one transaction to pool.`);
 }
 
 async function clearDepreciatedTxns(chainInfo, stateDB) {
