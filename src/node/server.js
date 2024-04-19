@@ -120,7 +120,7 @@ async function startServer(options) {
             return;
           }
 
-          console.log(newBlock)
+          
 
           // We will only continue checking the block if its parentHash is not the same as the latest block's hash.
           // This is because the block sent to us is likely duplicated or from a node that has lost and should be discarded.
@@ -137,7 +137,7 @@ async function startServer(options) {
           ) {
             chainInfo.checkedBlock[newBlock.hash] = true;
 
-            if (await verifyBlock(newBlock, chainInfo, stateDB, codeDB,ENABLE_LOGGING)) {
+            if (await verifyBlock(newBlock, chainInfo, stateDB, codeDB, ENABLE_LOGGING)) {
               console.log( `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] New block received.`);
 
               // If mining is enabled, we will set mined to true, informing that another node has mined before us.
@@ -153,8 +153,7 @@ async function startServer(options) {
 
               // console.log(`NEW_BLOCK call ${newBlock.blockNumber}`)
               await blockDB.put(newBlock.blockNumber.toString(), Buffer.from(_message.data)); // Add block to chain
-              await bhashDB.put(newBlock.hash, numToBuffer(newBlock.blockNumber)
-              ); // Assign block number to the matching block hash
+              await bhashDB.put(newBlock.hash, numToBuffer(newBlock.blockNumber)); // Assign block number to the matching block hash
 
               // Apply to all txns of the block: Assign transaction index and block number to transaction hash
               for (let txIndex = 0; txIndex < newBlock.transactions.length; txIndex++) {
@@ -165,6 +164,7 @@ async function startServer(options) {
               }
 
               chainInfo.latestBlock = newBlock; // Update latest block cache
+              // chainInfo.latestSyncBlock = newBlock;
 
               // Update the new transaction pool (remove all the transactions that are no longer valid).
               chainInfo.transactionPool = await clearDepreciatedTxns(chainInfo,stateDB);
@@ -294,7 +294,7 @@ async function startServer(options) {
                 if (!chainInfo.latestSyncBlock) {
                   chainInfo.latestSyncBlock = block; // Update latest synced block.
                   await changeState(block, stateDB, codeDB, ENABLE_LOGGING); // Force transit state
-                }
+                } 
 
                 chainInfo.latestBlock = block; // Update latest block cache
                 console.log(`\x1b[32mLOG\x1b[0m [${(new Date()).toISOString()}] Synced block at position ${block.blockNumber}.`);
@@ -415,15 +415,22 @@ async function startServer(options) {
     // if ((await blockDB.keys().all()).length !== 0) {
     //   chainInfo.latestBlock = Block.deserialize([...(await blockDB.get(Math.max(...(await blockDB.keys().all()).map((key) => parseInt(key))).toString())),]);
     // }
+    // if (pbft) {
+    //   ENABLE_MINING = true;
+    // } else {
+    //   ENABLE_MINING;
+    // }
 
-    setTimeout(async () => {
-      // Need to connect with other peers to run case TYPE.REQUEST_BLOCK 
-      for (const node of opened) {
-        // Send message REQUEST_BLOCK for others
-        console.log(`Current sync block: ${currentSyncBlock}`);
-        node.socket.send(produceMessage(TYPE.REQUEST_BLOCK, {blockNumber: currentSyncBlock, requestAddress: MY_ADDRESS,}));
-      }
-    }, 1000);
+    // if (ENABLE_MINING) {
+      setTimeout(async () => {
+        // Need to connect with other peers to run case TYPE.REQUEST_BLOCK 
+        for (const node of opened) {
+          // Send message REQUEST_BLOCK for others
+          // console.log(`Current sync block: ${currentSyncBlock}`);
+          node.socket.send(produceMessage(TYPE.REQUEST_BLOCK, {blockNumber: currentSyncBlock, requestAddress: MY_ADDRESS,}));
+        }
+      }, 5000);
+    // }
   }
 
   // Transaction(recipient = "", amount = "0", gas = "1000000000000", additionalData = {}) {
@@ -524,7 +531,7 @@ async function mine(publicKey, ENABLE_LOGGING) {
     chainInfo.latestBlock.hash,
     SHA256(publicKey)
   );
-  console.log(block)
+  // console.log(block)
   
   // Collect a list of transactions to mine
   const transactionsToMine = [];
@@ -702,7 +709,7 @@ async function mine(publicKey, ENABLE_LOGGING) {
 }
 
 // Function to mine continuously
-function loopMine(publicKey, ENABLE_CHAIN_REQUEST, ENABLE_LOGGING, time = 1000) {
+function loopMine(publicKey, ENABLE_CHAIN_REQUEST, ENABLE_LOGGING, time = 5000) {
   let length = chainInfo.latestBlock.blockNumber;
   let mining = true;
 
