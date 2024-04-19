@@ -24,7 +24,7 @@ async function verifyBlock(newBlock, chainInfo, stateDB, codeDB, enableLogging =
             chainInfo.latestBlock.hash
             // newBlock.difficulty.toString()        +
             // chainInfo.latestBlock.hash            +
-            // newBlock.nonce.toString() => 
+            // newBlock.nonce.to String() => 
 
             // Difficulty = 0x000000000000000000000000000012
             // Nếu 10 phút chưa có ai đào được, 27
