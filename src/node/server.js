@@ -40,6 +40,9 @@ const connected = []; // Addresses from connected nodes.
 let connectedNodes = 0;
 
 let worker = fork(`${__dirname}/../miner/worker.js`); // Worker thread (for PoW mining).
+
+console.log(worker.events)
+
 let mined = false; // This will be used to inform the node that another node has already mined before it.
 
 // Some chain info cache
@@ -64,6 +67,286 @@ const bhashDB = new Level(__dirname + "/../../log/bhashStore", {
 });
 const txhashDB = new Level(__dirname + "/../../log/txhashStore");
 const codeDB = new Level(__dirname + "/../../log/codeStore");
+
+// Function to connect to a node.
+function connect(MY_ADDRESS, address) {
+  if (
+    !connected.find((peerAddress) => peerAddress === address) &&
+    address !== MY_ADDRESS
+  ) {
+    const socket = new WS(address); // Get address's socket.
+
+    // Open a connection to the socket.
+    socket.on("open", async () => {
+      for (const _address of [MY_ADDRESS, ...connected])
+        socket.send(produceMessage(TYPE.HANDSHAKE, _address));
+      for (const node of opened)
+        node.socket.send(produceMessage(TYPE.HANDSHAKE, address));
+
+      // If the address already existed in "connected" or "opened", we will not push, preventing duplications.
+      if (
+        !opened.find((peer) => peer.address === address) &&
+        address !== MY_ADDRESS
+      ) {
+        opened.push({ socket, address });
+      }
+
+      if (
+        !connected.find((peerAddress) => peerAddress === address) &&
+        address !== MY_ADDRESS
+      ) {
+        connected.push(address);
+
+        connectedNodes++;
+
+        console.log(`\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Connected to ${address}.`);
+
+        // Listen for disconnection, will remove them from "opened" and "connected".
+        socket.on("close", () => {
+          opened.splice(connected.indexOf(address), 1);
+          connected.splice(connected.indexOf(address), 1);
+
+          console.log(`\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Disconnected from ${address}.`);
+        });
+      }
+    });
+  }
+
+  return true;
+}
+
+// Function to broadcast a transaction.
+async function sendTransaction(transaction) {
+  sendMessage(produceMessage(TYPE.CREATE_TRANSACTION, transaction), opened);
+  // console.log(transaction);
+
+  console.log(`\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Sent one transaction.`);
+
+  await addTransaction(transaction, chainInfo, stateDB);
+}
+
+async function mine(publicKey, ENABLE_LOGGING) {
+  function mine(block) {
+    return new Promise((resolve, reject) => {
+      worker.addListener("message", (message) => resolve(message.result));
+
+      worker.send({ type: "MINE", data: [block] }); // Send a message to the worker thread, asking it to mine.
+    });
+  }
+
+  // Block(blockNumber = 1, timestamp = Date.now(), transactions = [], parentHash = "",coinbase = "")
+  // Create a new block.
+  const block = new Block(chainInfo.latestBlock.blockNumber + 1,
+    Date.now(),
+    [], // Will add transactions down here
+    // chainInfo.difficulty,
+    chainInfo.latestBlock.hash,
+    SHA256(publicKey)
+  );
+  // console.log(block)
+  
+  // Collect a list of transactions to mine
+  const transactionsToMine = [];
+  const states = {};
+  const code = {};
+  const storage = {};
+  const skipped = {};
+  let totalTxGas = 0n;
+  let totalContractGas = 0n;
+
+  const existedAddresses = await stateDB.keys().all();
+
+  for (const tx of chainInfo.transactionPool) {
+    if (totalContractGas + BigInt(tx.additionalData.contractGas || 0) >= BigInt(BLOCK_GAS_LIMIT)) break;
+
+    const txSenderPubkey = Transaction.getPubKey(tx);
+    const txSenderAddress = SHA256(txSenderPubkey);
+
+    if (skipped[txSenderAddress]) continue; // Check if transaction is from an ignored address.
+
+    const totalAmountToPay = BigInt(tx.amount) + BigInt(tx.gas) + BigInt(tx.additionalData.contractGas || 0);
+
+    // Normal coin transfers
+    if (!states[txSenderAddress]) {
+      
+      const senderState = deserializeState(await stateDB.get(txSenderAddress));
+
+      states[txSenderAddress] = senderState;
+      code[senderState.codeHash] = await codeDB.get(senderState.codeHash);
+
+      if (senderState.codeHash !== EMPTY_HASH || BigInt(senderState.balance) < totalAmountToPay) {
+        skipped[txSenderAddress] = true;
+        continue;
+      }
+
+      states[txSenderAddress].balance = (BigInt(senderState.balance) - BigInt(tx.amount) - BigInt(tx.gas) - BigInt(tx.additionalData.contractGas || 0)).toString();
+    } else {
+      if (states[txSenderAddress].codeHash !== EMPTY_HASH || BigInt(states[txSenderAddress].balance) < totalAmountToPay) {
+        skipped[txSenderAddress] = true;
+        continue;
+      }
+
+      states[txSenderAddress].balance = (BigInt(states[txSenderAddress].balance) - BigInt(tx.amount) - BigInt(tx.gas) - BigInt(tx.additionalData.contractGas || 0)).toString();
+    }
+
+    if (!existedAddresses.includes(tx.recipient) && !states[tx.recipient]) {
+      states[tx.recipient] = {balance: "0", codeHash: EMPTY_HASH, storageRoot: EMPTY_HASH,};
+      code[EMPTY_HASH] = "";
+    }
+
+    if (existedAddresses.includes(tx.recipient) && !states[tx.recipient]) {
+      states[tx.recipient] = deserializeState(await stateDB.get(tx.recipient));
+      code[states[tx.recipient].codeHash] = await codeDB.get(states[tx.recipient].codeHash);
+    }
+
+    states[tx.recipient].balance = (BigInt(states[tx.recipient].balance) + BigInt(tx.amount)).toString();
+
+    // Contract deployment
+    if (states[txSenderAddress].codeHash === EMPTY_HASH && typeof tx.additionalData.scBody === "string") {
+      states[txSenderAddress].codeHash = SHA256(tx.additionalData.scBody);
+      code[states[txSenderAddress].codeHash] = tx.additionalData.scBody;
+    }
+
+    // Update nonce
+    // states[txSenderAddress].nonce += 1;
+
+    // Decide to drop or add transaction to block
+    if (BigInt(states[txSenderAddress].balance) < 0n) {
+      skipped[txSenderAddress] = true;
+      continue;
+    } else {
+      transactionsToMine.push(tx);
+
+      totalContractGas += BigInt(tx.additionalData.contractGas || 0);
+      totalTxGas += BigInt(tx.gas) + BigInt(tx.additionalData.contractGas || 0);
+    }
+
+    // Contract execution
+    if (states[tx.recipient].codeHash !== EMPTY_HASH) {
+      const contractInfo = { address: tx.recipient };
+
+      const [newState, newStorage] = await jelscript(code[states[tx.recipient].codeHash], states, BigInt(tx.additionalData.contractGas || 0), stateDB, block, tx, contractInfo, false);
+
+      for (const account of Object.keys(newState)) {
+        states[account] = newState[account];
+
+        storage[tx.recipient] = newStorage;
+      }
+    }
+  }
+
+  const transactionsAsObj = [...transactionsToMine];
+
+  block.transactions = transactionsToMine.map((tx) => Transaction.serialize(tx)); // Add transactions to block
+  block.hash = Block.getHash(block); // Re-hash with new transactions
+  block.txRoot = Merkle.buildTxTrie(transactionsAsObj).root; // Re-gen transaction root with new transactions
+
+  // Mine the block.
+  mine(block)
+    .then(async (block) => {
+      // If the block is not mined before, we will add it to our chain and broadcast this new block.
+      if (!mined) {
+        // await updateDifficulty(block, chainInfo, blockDB); // Update difficulty
+        console.log(block)
+
+        await blockDB.put(block.blockNumber.toString(), Buffer.from(Block.serialize(block))); // Add block to chain
+        await bhashDB.put(block.hash, numToBuffer(block.blockNumber)); // Assign block number to the matching block hash
+
+        // Assign transaction index and block number to transaction hash
+        for (let txIndex = 0; txIndex < block.transactions.length; txIndex++) {
+          const tx = Transaction.deserialize(block.transactions[txIndex]);
+          const txHash = Transaction.getHash(tx);
+
+          await txhashDB.put(txHash, block.blockNumber.toString() + " " + txIndex.toString());
+        }
+
+        chainInfo.latestBlock = block; // Update latest block cache
+        console.log(block)
+        return;
+        // Reward
+        if (!existedAddresses.includes(block.coinbase) && !states[block.coinbase]) {
+          states[block.coinbase] = {balance: "0", codeHash: EMPTY_HASH, storageRoot: EMPTY_HASH,};
+          code[EMPTY_HASH] = "";
+        }
+
+        if (existedAddresses.includes(block.coinbase) && !states[block.coinbase]) {
+          states[block.coinbase] = deserializeState(await stateDB.get(block.coinbase));
+          code[states[block.coinbase].codeHash] = await codeDB.get(states[block.coinbase].codeHash);
+        }
+
+        let gas = 0n;
+
+        for (const tx of transactionsAsObj) {
+          gas += BigInt(tx.gas) + BigInt(tx.additionalData.contractGas || 0);
+        }
+
+        states[block.coinbase].balance = (BigInt(states[block.coinbase].balance) + BigInt(BLOCK_REWARD) + gas).toString();
+
+        // Transit state
+        for (const address in storage) {
+          const storageDB = new Level(__dirname + "/../../log/accountStore/" + address);
+          const keys = Object.keys(storage[address]);
+
+          states[address].storageRoot = Merkle.buildTxTrie(keys.map((key) => key + " " + storage[address][key]), false).root;
+
+          for (const key of keys) {
+            await storageDB.put(key, storage[address][key]);
+          }
+
+          await storageDB.close();
+        }
+
+        for (const account of Object.keys(states)) {
+          await stateDB.put(account, Buffer.from(serializeState(states[account])));
+
+          await codeDB.put(states[account].codeHash, code[states[account].codeHash]);
+        }
+
+        // Update the new transaction pool (remove all the transactions that are no longer valid).
+        chainInfo.transactionPool = await clearDepreciatedTxns(chainInfo, stateDB);
+
+        sendMessage(produceMessage(TYPE.NEW_BLOCK, Block.serialize(chainInfo.latestBlock)), opened); // Broadcast the new block
+
+        console.log(`\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Block #${chainInfo.latestBlock.blockNumber} mined and synced, state transited.`);
+        
+      } else {
+        mined = false;
+      }
+
+      // Re-create the worker thread
+      worker.kill();
+
+      worker = fork(`${__dirname}/../miner/worker.js`);
+    })
+    .catch((err) => console.log(`\x1b[31mERROR\x1b[0m [${new Date().toISOString()}] Error at mining child process`, err));
+}
+
+// Function to mine continuously
+function loopMine(publicKey, ENABLE_CHAIN_REQUEST, ENABLE_LOGGING, time = 5000) {
+  let length = chainInfo.latestBlock.blockNumber;
+  let mining = true;
+
+  setInterval(async () => {
+    console.log(`Loop mine call`);
+
+    // if (length !== chainInfo.latestBlock.blockNumber) {
+      await mine(publicKey, ENABLE_LOGGING);
+      return;
+    // }
+    console.log(chainInfo)
+
+    // if (mining || length !== chainInfo.latestBlock.blockNumber) {
+    //   mining = false;
+    //   length = chainInfo.latestBlock.blockNumber;
+
+    //   if (!ENABLE_CHAIN_REQUEST) await mine(publicKey, ENABLE_LOGGING);
+
+    //   // console.log(`Chain info in loop Mine`);
+    //   console.log(chainInfo)
+
+    // }
+  }, time);
+}
 
 async function startServer(options) {
   const PORT = options.PORT || 3000; // Node's PORT
@@ -120,8 +403,7 @@ async function startServer(options) {
             return;
           }
 
-          
-
+        
           // We will only continue checking the block if its parentHash is not the same as the latest block's hash.
           // This is because the block sent to us is likely duplicated or from a node that has lost and should be discarded.
 
@@ -352,10 +634,12 @@ async function startServer(options) {
     });
   });
 
+
   if (!ENABLE_CHAIN_REQUEST) {
+
     if ((await blockDB.keys().all()).length === 0) {
       // Initial state
-
+      console.log(chainInfo.latestBlock)
       await stateDB.put(FIRST_ACCOUNT, Buffer.from(serializeState({balance: INITIAL_SUPPLY, codeHash: EMPTY_HASH, storageRoot: EMPTY_HASH})));
 
       await blockDB.put(chainInfo.latestBlock.blockNumber.toString(), Buffer.from(Block.serialize(chainInfo.latestBlock)));
@@ -365,7 +649,6 @@ async function startServer(options) {
         `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Created Genesis Block with:\n` +
           `    Block number: ${chainInfo.latestBlock.blockNumber.toString()}\n` +
           `    Timestamp: ${chainInfo.latestBlock.timestamp.toString()}\n` +
-          // `    Difficulty: ${chainInfo.latestBlock.difficulty.toString()}\n` +
           `    Coinbase: ${chainInfo.latestBlock.coinbase.toString()}\n` +
           `    Hash: ${chainInfo.latestBlock.hash.toString()}\n` +
           `    TxRoot: ${chainInfo.latestBlock.txRoot.toString()}`
@@ -373,8 +656,11 @@ async function startServer(options) {
 
       await changeState(chainInfo.latestBlock, stateDB, codeDB);
     } else {
-      chainInfo.latestBlock = Block.deserialize([...(await blockDB.get(Math.max(...(await blockDB.keys().all()).map((key) => parseInt(key))).toString())),]);
-      // chainInfo.difficulty = chainInfo.latestBlock.difficulty;
+      // Update latest block in chain cache
+      const highestBlockNumber = Math.max(...(await blockDB.keys().all()).map((key) => parseInt(key))).toString()
+      const latestBlock = Block.deserialize([...(await blockDB.get(highestBlockNumber))]);
+
+      chainInfo.latestBlock = latestBlock;
     }
   }
 
@@ -384,7 +670,6 @@ async function startServer(options) {
 
   // Sync chain
   let currentSyncBlock = 1;
-
 
   if (ENABLE_CHAIN_REQUEST) {
     
@@ -452,288 +737,6 @@ async function startServer(options) {
   if (ENABLE_MINING) loopMine(publicKey, ENABLE_CHAIN_REQUEST, ENABLE_LOGGING);
   if (ENABLE_RPC) rpc(RPC_PORT, { publicKey, mining: ENABLE_MINING, chainInfo }, sendTransaction, keyPair, stateDB, blockDB, bhashDB, codeDB, txhashDB);
 
-}
-
-// Function to connect to a node.
-function connect(MY_ADDRESS, address) {
-  if (
-    !connected.find((peerAddress) => peerAddress === address) &&
-    address !== MY_ADDRESS
-  ) {
-    const socket = new WS(address); // Get address's socket.
-
-    // Open a connection to the socket.
-    socket.on("open", async () => {
-      for (const _address of [MY_ADDRESS, ...connected])
-        socket.send(produceMessage(TYPE.HANDSHAKE, _address));
-      for (const node of opened)
-        node.socket.send(produceMessage(TYPE.HANDSHAKE, address));
-
-      // If the address already existed in "connected" or "opened", we will not push, preventing duplications.
-      if (
-        !opened.find((peer) => peer.address === address) &&
-        address !== MY_ADDRESS
-      ) {
-        opened.push({ socket, address });
-      }
-
-      if (
-        !connected.find((peerAddress) => peerAddress === address) &&
-        address !== MY_ADDRESS
-      ) {
-        connected.push(address);
-
-        connectedNodes++;
-
-        console.log(`\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Connected to ${address}.`);
-
-        // Listen for disconnection, will remove them from "opened" and "connected".
-        socket.on("close", () => {
-          opened.splice(connected.indexOf(address), 1);
-          connected.splice(connected.indexOf(address), 1);
-
-          console.log(`\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Disconnected from ${address}.`);
-        });
-      }
-    });
-  }
-
-  return true;
-}
-
-// Function to broadcast a transaction.
-async function sendTransaction(transaction) {
-  sendMessage(produceMessage(TYPE.CREATE_TRANSACTION, transaction), opened);
-  // console.log(transaction);
-
-  console.log(`\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Sent one transaction.`);
-
-  await addTransaction(transaction, chainInfo, stateDB);
-}
-
-
-
-async function mine(publicKey, ENABLE_LOGGING) {
-  function mine(block) {
-    return new Promise((resolve, reject) => {
-      worker.addListener("message", (message) => resolve(message.result));
-
-      worker.send({ type: "MINE", data: [block] }); // Send a message to the worker thread, asking it to mine.
-    });
-  }
-
-  // Block(blockNumber = 1, timestamp = Date.now(), transactions = [], parentHash = "",coinbase = "")
-  // Create a new block.
-  const block = new Block(chainInfo.latestBlock.blockNumber + 1,
-    Date.now(),
-    [], // Will add transactions down here
-    // chainInfo.difficulty,
-    chainInfo.latestBlock.hash,
-    SHA256(publicKey)
-  );
-  // console.log(block)
-  
-  // Collect a list of transactions to mine
-  const transactionsToMine = [];
-  const  states = {};
-  const code = {};
-  const storage = {};
-  const skipped = {};
-  let totalTxGas = 0n;
-  let totalContractGas = 0n;
-
-  const existedAddresses = await stateDB.keys().all();
-
-  for (const tx of chainInfo.transactionPool) {
-    if (totalContractGas + BigInt(tx.additionalData.contractGas || 0) >= BigInt(BLOCK_GAS_LIMIT)) break;
-
-    const txSenderPubkey = Transaction.getPubKey(tx);
-    const txSenderAddress = SHA256(txSenderPubkey);
-
-    if (skipped[txSenderAddress]) continue; // Check if transaction is from an ignored address.
-
-    const totalAmountToPay = BigInt(tx.amount) + BigInt(tx.gas) + BigInt(tx.additionalData.contractGas || 0);
-
-    // Normal coin transfers
-    if (!states[txSenderAddress]) {
-      
-      const senderState = deserializeState(await stateDB.get(txSenderAddress));
-
-      states[txSenderAddress] = senderState;
-      code[senderState.codeHash] = await codeDB.get(senderState.codeHash);
-
-      if (senderState.codeHash !== EMPTY_HASH || BigInt(senderState.balance) < totalAmountToPay) {
-        skipped[txSenderAddress] = true;
-        continue;
-      }
-
-      states[txSenderAddress].balance = (BigInt(senderState.balance) - BigInt(tx.amount) - BigInt(tx.gas) - BigInt(tx.additionalData.contractGas || 0)).toString();
-    } else {
-      if (states[txSenderAddress].codeHash !== EMPTY_HASH || BigInt(states[txSenderAddress].balance) < totalAmountToPay) {
-        skipped[txSenderAddress] = true;
-        continue;
-      }
-
-      states[txSenderAddress].balance = (BigInt(states[txSenderAddress].balance) - BigInt(tx.amount) - BigInt(tx.gas) - BigInt(tx.additionalData.contractGas || 0)).toString();
-    }
-
-    if (!existedAddresses.includes(tx.recipient) && !states[tx.recipient]) {
-      states[tx.recipient] = {balance: "0", codeHash: EMPTY_HASH, storageRoot: EMPTY_HASH,};
-      code[EMPTY_HASH] = "";
-    }
-
-    if (existedAddresses.includes(tx.recipient) && !states[tx.recipient]) {
-      states[tx.recipient] = deserializeState(await stateDB.get(tx.recipient));
-      code[states[tx.recipient].codeHash] = await codeDB.get(states[tx.recipient].codeHash);
-    }
-
-    states[tx.recipient].balance = (BigInt(states[tx.recipient].balance) + BigInt(tx.amount)).toString();
-
-    // Contract deployment
-    if (states[txSenderAddress].codeHash === EMPTY_HASH && typeof tx.additionalData.scBody === "string") {
-      states[txSenderAddress].codeHash = SHA256(tx.additionalData.scBody);
-      code[states[txSenderAddress].codeHash] = tx.additionalData.scBody;
-    }
-
-    // Update nonce
-    // states[txSenderAddress].nonce += 1;
-
-    // Decide to drop or add transaction to block
-    if (BigInt(states[txSenderAddress].balance) < 0n) {
-      skipped[txSenderAddress] = true;
-      continue;
-    } else {
-      transactionsToMine.push(tx);
-
-      totalContractGas += BigInt(tx.additionalData.contractGas || 0);
-      totalTxGas += BigInt(tx.gas) + BigInt(tx.additionalData.contractGas || 0);
-    }
-
-    // Contract execution
-    if (states[tx.recipient].codeHash !== EMPTY_HASH) {
-      const contractInfo = { address: tx.recipient };
-
-      const [newState, newStorage] = await jelscript(code[states[tx.recipient].codeHash], states, BigInt(tx.additionalData.contractGas || 0), stateDB, block, tx, contractInfo, false);
-
-      for (const account of Object.keys(newState)) {
-        states[account] = newState[account];
-
-        storage[tx.recipient] = newStorage;
-      }
-    }
-  }
-
-  const transactionsAsObj = [...transactionsToMine];
-
-  block.transactions = transactionsToMine.map((tx) => Transaction.serialize(tx)); // Add transactions to block
-  block.hash = Block.getHash(block); // Re-hash with new transactions
-  block.txRoot = Merkle.buildTxTrie(transactionsAsObj).root; // Re-gen transaction root with new transactions
-
-  // Mine the block.
-  mine(block)
-    .then(async (result) => {
-      // If the block is not mined before, we will add it to our chain and broadcast this new block.
-      if (!mined) {
-        // await updateDifficulty(result, chainInfo, blockDB); // Update difficulty
-        console.log("Mine call")
-
-        await blockDB.put(result.blockNumber.toString(), Buffer.from(Block.serialize(result))); // Add block to chain
-        await bhashDB.put(result.hash, numToBuffer(result.blockNumber)); // Assign block number to the matching block hash
-
-        // Assign transaction index and block number to transaction hash
-        for (let txIndex = 0; txIndex < result.transactions.length; txIndex++) {
-          const tx = Transaction.deserialize(result.transactions[txIndex]);
-          const txHash = Transaction.getHash(tx);
-
-          await txhashDB.put(txHash, result.blockNumber.toString() + " " + txIndex.toString());
-        }
-
-        chainInfo.latestBlock = result; // Update latest block cache
-
-        // Reward
-        if (!existedAddresses.includes(result.coinbase) && !states[result.coinbase]) {
-          states[result.coinbase] = {balance: "0", codeHash: EMPTY_HASH, storageRoot: EMPTY_HASH,};
-          code[EMPTY_HASH] = "";
-        }
-
-        if (existedAddresses.includes(result.coinbase) && !states[result.coinbase]) {
-          states[result.coinbase] = deserializeState(await stateDB.get(result.coinbase));
-          code[states[result.coinbase].codeHash] = await codeDB.get(states[result.coinbase].codeHash);
-        }
-
-        let gas = 0n;
-
-        for (const tx of transactionsAsObj) {
-          gas += BigInt(tx.gas) + BigInt(tx.additionalData.contractGas || 0);
-        }
-
-        states[result.coinbase].balance = (BigInt(states[result.coinbase].balance) + BigInt(BLOCK_REWARD) + gas).toString();
-
-        // Transit state
-        for (const address in storage) {
-          const storageDB = new Level(__dirname + "/../../log/accountStore/" + address);
-          const keys = Object.keys(storage[address]);
-
-          states[address].storageRoot = Merkle.buildTxTrie(keys.map((key) => key + " " + storage[address][key]), false).root;
-
-          for (const key of keys) {
-            await storageDB.put(key, storage[address][key]);
-          }
-
-          await storageDB.close();
-        }
-
-        for (const account of Object.keys(states)) {
-          await stateDB.put(account, Buffer.from(serializeState(states[account])));
-
-          await codeDB.put(states[account].codeHash, code[states[account].codeHash]);
-        }
-
-        // Update the new transaction pool (remove all the transactions that are no longer valid).
-        chainInfo.transactionPool = await clearDepreciatedTxns(chainInfo, stateDB);
-
-        sendMessage(produceMessage(TYPE.NEW_BLOCK, Block.serialize(chainInfo.latestBlock)), opened); // Broadcast the new block
-
-        console.log(`\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Block #${chainInfo.latestBlock.blockNumber} mined and synced, state transited.`);
-        
-      } else {
-        mined = false;
-      }
-
-      // Re-create the worker thread
-      worker.kill();
-
-      worker = fork(`${__dirname}/../miner/worker.js`);
-    })
-    .catch((err) => console.log(`\x1b[31mERROR\x1b[0m [${new Date().toISOString()}] Error at mining child process`, err));
-}
-
-// Function to mine continuously
-function loopMine(publicKey, ENABLE_CHAIN_REQUEST, ENABLE_LOGGING, time = 5000) {
-  let length = chainInfo.latestBlock.blockNumber;
-  let mining = true;
-
-  setInterval(async () => {
-    console.log(`Loop mine call`);
-    console.log("Blocknumber of latest block", chainInfo.latestBlock.blockNumber);
-    // console.log('Mining', mining)
-
-    // if (length !== chainInfo.latestBlock.blockNumber) {
-      await mine(publicKey, ENABLE_LOGGING);
-    // }
-    console.log(chainInfo)
-
-    // if (mining || length !== chainInfo.latestBlock.blockNumber) {
-    //   mining = false;
-    //   length = chainInfo.latestBlock.blockNumber;
-
-    //   if (!ENABLE_CHAIN_REQUEST) await mine(publicKey, ENABLE_LOGGING);
-
-    //   // console.log(`Chain info in loop Mine`);
-    //   console.log(chainInfo)
-
-    // }
-  }, time);
 }
 
 module.exports = { startServer };
