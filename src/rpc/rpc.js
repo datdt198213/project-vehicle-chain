@@ -235,8 +235,7 @@ function rpc(PORT, client, transactionHandler, keyPair, stateDB, blockDB, bhashD
                 break;
             
             case "get_storageKeys":
-                if (
-                    typeof req.body.params.address !== "string"    ||
+                if (typeof req.body.params.address !== "string"    ||
                     !(await stateDB.keys().all()).includes(req.body.params.address)
                 ) {
                     throwError("Invalid request.", 400);
@@ -249,9 +248,8 @@ function rpc(PORT, client, transactionHandler, keyPair, stateDB, blockDB, bhashD
                 break;
             
             case "get_storageRoot":
-                if (
-                    typeof req.body.params.address !== "string"    ||
-                    !(await stateDB.keys().all()).includes(req.body.params.address)
+                if (typeof req.body.params.address !== "string"    || 
+                !(await stateDB.keys().all()).includes(req.body.params.address)
                 ) {
                     throwError("Invalid request.", 400);
                 } else {
@@ -261,11 +259,9 @@ function rpc(PORT, client, transactionHandler, keyPair, stateDB, blockDB, bhashD
                 break;
             
             case "get_transactionByBlockNumberAndIndex":
-                if (
-                    typeof req.body.params !== "object" ||
+                if (typeof req.body.params !== "object" ||
                     typeof req.body.params.blockNumber !== "number" ||
-                    typeof req.body.params.index !== "number"
-                ) {
+                    typeof req.body.params.index !== "number") {
                     throwError("Invalid request.", 400);
                 } else {
                     const currentBlockNumber = Math.max(...(await blockDB.keys().all()).map(key => parseInt(key)));
@@ -312,10 +308,7 @@ function rpc(PORT, client, transactionHandler, keyPair, stateDB, blockDB, bhashD
                 break;
 
             case "get_transactionByTxHash":
-                if (
-                    typeof req.body.params !== "object" ||
-                    typeof req.body.params.hash !== "string"
-                ) {
+                if (typeof req.body.params !== "object" || typeof req.body.params.hash !== "string") {
                     throwError("Invalid request.", 400);
                 } else {
                     try {
@@ -335,10 +328,8 @@ function rpc(PORT, client, transactionHandler, keyPair, stateDB, blockDB, bhashD
                 break;
 
             case "sendTransaction":
-                if (
-                    typeof req.body.params !== "object" ||
-                    !Array.isArray(req.body.params.transaction)
-                ) {
+                // If transaction is array return invalid request
+                if (typeof req.body.params !== "object" || !Array.isArray(req.body.params.transaction)) {
                     throwError("Invalid request.", 400);
                 } else {
                     respond({ message: "tx received." });
@@ -350,14 +341,10 @@ function rpc(PORT, client, transactionHandler, keyPair, stateDB, blockDB, bhashD
                 break;
             
             case "signTransaction":
-                if (
-                    typeof req.body.params !== "object" ||
-                    typeof req.body.params.transaction !== "object"
-                ) {
+                if (typeof req.body.params !== "object" || typeof req.body.params.transaction !== "object") {
                     throwError("Invalid request.", 400);
                 } else {
-                    const transaction = req.body.params.transaction;
-
+                    const transaction = req.body.params.transaction;                    
                     Transaction.sign(transaction, keyPair);
 
                     respond({ transaction });
@@ -366,10 +353,7 @@ function rpc(PORT, client, transactionHandler, keyPair, stateDB, blockDB, bhashD
                 break;
             
             case "serializeTransaction":
-                if (
-                    typeof req.body.params !== "object" ||
-                    typeof req.body.params.transaction !== "object"
-                ) {
+                if (typeof req.body.params !== "object" || typeof req.body.params.transaction !== "object") {
                     throwError("Invalid request.", 400);
                 } else {
                     const transaction = req.body.params.transaction;
@@ -384,10 +368,7 @@ function rpc(PORT, client, transactionHandler, keyPair, stateDB, blockDB, bhashD
                 break;
             
             case "deserializeTransaction":
-                if (
-                    typeof req.body.params !== "object" ||
-                    !Array.isArray(req.body.params.transaction)
-                ) {
+                if (typeof req.body.params !== "object" || !Array.isArray(req.body.params.transaction)) {
                     throwError("Invalid request.", 400);
                 } else {
                     const transaction = req.body.params.transaction;

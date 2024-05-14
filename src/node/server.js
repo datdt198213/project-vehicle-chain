@@ -24,7 +24,7 @@ const generateGenesisBlock = require("../core/genesis");
 const { addTransaction, clearDepreciatedTxns } = require("../core/txPool");
 const rpc = require("../rpc/rpc");
 const TYPE = require("./message-types");
-const { verifyBlock } = require("../consensus/consensus");
+const { verifyBlock, getProposer } = require("../consensus/consensus");
 const {
   parseJSON,
   numToBuffer,
@@ -40,6 +40,9 @@ const connected = []; // Addresses from connected nodes.
 let connectedNodes = 0;
 
 let worker = fork(`${__dirname}/../miner/worker.js`); // Worker thread (for PoW mining).
+
+console.log(worker.events)
+
 let mined = false; // This will be used to inform the node that another node has already mined before it.
 
 // Some chain info cache
@@ -64,361 +67,6 @@ const bhashDB = new Level(__dirname + "/../../log/bhashStore", {
 });
 const txhashDB = new Level(__dirname + "/../../log/txhashStore");
 const codeDB = new Level(__dirname + "/../../log/codeStore");
-
-async function startServer(options) {
-  const PORT = options.PORT || 3000; // Node's PORT
-  const RPC_PORT = options.RPC_PORT || 5000; // RPC server's PORT
-  const PEERS = options.PEERS || []; // Peers to connect to
-  const MAX_PEERS = options.MAX_PEERS || 10; // Maximum number of peers to connect to
-  const MY_ADDRESS = options.MY_ADDRESS || "ws://localhost:3000"; // Node's address
-  const ENABLE_MINING = options.ENABLE_MINING ? true : false; // Enable mining?
-  const ENABLE_LOGGING = options.ENABLE_LOGGING ? true : false; // Enable logging?
-  const ENABLE_RPC = options.ENABLE_RPC ? true : false; // Enable RPC server?
-  let ENABLE_CHAIN_REQUEST = options.ENABLE_CHAIN_REQUEST ? true : false; // Enable chain sync request?
-  const GENESIS_HASH = options.GENESIS_HASH || ""; // Genesis block's hash
-
-  const privateKey = options.PRIVATE_KEY || ec.genKeyPair().getPrivate("hex");
-  const keyPair = ec.keyFromPrivate(privateKey, "hex");
-  const publicKey = keyPair.getPublic("hex");
-
-  process.on("uncaughtException", (err) =>
-    console.log(
-      `\x1b[31mERROR\x1b[0m [${new Date().toISOString()}] Uncaught Exception`,
-      err
-    )
-  );
-
-  await codeDB.put(EMPTY_HASH, "");
-
-  const server = new WS.Server({ port: PORT });
-
-  console.log(
-    `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] P2P server listening on PORT`,
-    PORT.toString()
-  );
-
-  server.on("connection", async (socket, req) => {
-    // Message handler
-    socket.on("message", async (message) => {
-      const _message = parseJSON(message); // Parse binary message to JSON
-
-      switch (_message.type) {
-        // Below are handlers for every message types.
-
-        case TYPE.NEW_BLOCK:
-          // "TYPE.NEW_BLOCK" is sent when someone wants to submit a new block.
-          // Its message body must contain the new block and the new difficulty.
-
-          let newBlock;
-          console.log("New Block call")
-
-          try {
-            newBlock = Block.deserialize(_message.data);
-          } catch (e) {
-            // If block fails to be deserialized, it's faulty
-
-            return;
-          }
-
-          // console.log(newBlock)
-          // console.log(chainInfo.checkedBlock[newBlock.hash])
-
-          // We will only continue checking the block if its parentHash is not the same as the latest block's hash.
-          // This is because the block sent to us is likely duplicated or from a node that has lost and should be discarded.
-
-          if (!chainInfo.checkedBlock[newBlock.hash]) {
-            chainInfo.checkedBlock[newBlock.hash] = true;
-          } else {
-            return;
-          }
-
-          if (newBlock.parentHash !== chainInfo.latestBlock.parentHash && 
-            (!ENABLE_CHAIN_REQUEST || (ENABLE_CHAIN_REQUEST && currentSyncBlock > 1))
-            // Only proceed if syncing is disabled or enabled but already synced at least the genesis block
-          ) {
-            chainInfo.checkedBlock[newBlock.hash] = true;
-
-            if (await verifyBlock(newBlock, chainInfo, stateDB, codeDB,ENABLE_LOGGING)) {
-              console.log( `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] New block ${newBlock.blockNumber} received.`);
-
-              // If mining is enabled, we will set mined to true, informing that another node has mined before us.
-              if (ENABLE_MINING) {
-                mined = true;
-
-                worker.kill(); // Stop the worker thread
-
-                worker = fork(`${__dirname}/../miner/worker.js`); // Renew
-              }
-
-              // await updateDifficulty(newBlock, chainInfo, blockDB); // Update difficulty
-
-              await blockDB.put(newBlock.blockNumber.toString(), Buffer.from(_message.data)); // Add block to chain
-              await bhashDB.put(newBlock.hash, numToBuffer(newBlock.blockNumber)
-              ); // Assign block number to the matching block hash
-
-              // Apply to all txns of the block: Assign transaction index and block number to transaction hash
-              for (let txIndex = 0; txIndex < newBlock.transactions.length; txIndex++) {
-                const tx = Transaction.deserialize(newBlock.transactions[txIndex]);
-                const txHash = Transaction.getHash(tx);
-
-                await txhashDB.put(txHash, newBlock.blockNumber.toString() + " " + txIndex.toString());
-              }
-
-              chainInfo.latestBlock = newBlock; // Update latest block cache
-
-              // Update the new transaction pool (remove all the transactions that are no longer valid).
-              chainInfo.transactionPool = await clearDepreciatedTxns(chainInfo,stateDB);
-
-              console.log(`\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Block #${newBlock.blockNumber} synced, state transited.`);
-
-              sendMessage(message, opened); // Broadcast block to other nodes
-
-              if (ENABLE_CHAIN_REQUEST) {
-                ENABLE_CHAIN_REQUEST = false;
-              }
-            }
-          }
-
-          break;
-
-        case TYPE.CREATE_TRANSACTION:
-          if (ENABLE_CHAIN_REQUEST) break; // Unsynced nodes should not be able to proceed.
-
-          // TYPE.CREATE_TRANSACTION is sent when someone wants to submit a transaction.
-          // Its message body must contain a transaction.
-
-          // Weakly verify the transation, full verification is achieved in block production.
-
-          let transaction;
-
-          try {
-            transaction = Transaction.deserialize(_message.data);
-          } catch (e) {
-            // If transaction can not be deserialized, it's faulty
-            break;
-          }
-
-          if (!(await Transaction.isValid(transaction, stateDB))) break;
-
-          // Get public key and address from sender
-          const txSenderPubkey = Transaction.getPubKey(transaction);
-          const txSenderAddress = SHA256(txSenderPubkey);
-
-          if (!(await stateDB.keys().all()).includes(txSenderAddress)) break;
-
-          // After transaction is added, the transaction must be broadcasted to others since the sender might only send it to a few nodes.
-
-          // This is pretty much the same as addTransaction, but we will send the transaction to other connected nodes if it's valid.
-
-          // Check nonce
-          // let maxNonce = deserializeState(await stateDB.get(txSenderAddress)).nonce;
-
-          // for (const tx of chainInfo.transactionPool) {
-          //     const poolTxSenderPubkey = Transaction.getPubKey(transaction);
-          //     const poolTxSenderAddress = SHA256(poolTxSenderPubkey);
-
-          //     if (poolTxSenderAddress === txSenderAddress && tx.nonce > maxNonce) {
-          //         maxNonce = tx.nonce;
-          //     }
-          // }
-
-          // if (maxNonce + 1 !== transaction.nonce) return;
-
-          console.log(
-            `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] New transaction received, broadcasted and added to pool.`
-          );
-
-          chainInfo.transactionPool.push(transaction);
-
-          // Broadcast the transaction
-          sendMessage(message, opened);
-
-          break;
-
-        case TYPE.REQUEST_BLOCK:
-          const { blockNumber, requestAddress } = _message.data;
-          let requestedBlock;
-          
-          
-          try {
-            requestedBlock = [...(await blockDB.get(blockNumber.toString()))]; // Get block
-          } catch (err) {
-            if (err.notFound) {
-              console.error(`Block number not found in blockDB: ${blockNumber}`);
-            }
-            // If block does not exist, break
-            break;
-          }
-
-          const socket = opened.find((node) => node.address === requestAddress).socket; // Get socket from address
-          socket.send(produceMessage(TYPE.SEND_BLOCK, requestedBlock)); // Send block
-          console.log( `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Sent block at position ${blockNumber} to ${requestAddress}.`);
-
-          break;
-
-        case TYPE.SEND_BLOCK:
-          let block;
-          console.log(`Send block call`)
-          try {
-            block = Block.deserialize(_message.data);
-          } catch (e) {
-            // If block fails to be deserialized, it's faulty
-            return;
-          }
-
-          // If latest synced block is null, we immediately add the block into the chain without verification.
-          // This happens due to the fact that the genesis block can discard every possible set rule ¯\_(ツ)_/¯
-
-          // But wait, isn't that unsafe? Well, this is because we don't have an official JeChain "network" yet.
-          // But if there is, one can generate the first genesis block and we can add its hash into config,
-          // we then check if the genesis block matches with the hash which is safe.
-          if (ENABLE_CHAIN_REQUEST && block.blockNumber === currentSyncBlock) {
-            const verificationHandler = async function (block) {
-            console.log('verifyHandler')
-              
-              if ((chainInfo.latestSyncBlock === null && (!GENESIS_HASH || GENESIS_HASH === block.hash)) || // For genesis
-                await verifyBlock(block, chainInfo, stateDB, codeDB, ENABLE_LOGGING) // For all others
-              ) {
-                console.log('verifyBlock')
-                await blockDB.put(block.blockNumber.toString(), Buffer.from(_message.data)); // Add block to chain
-                await bhashDB.put(block.hash, numToBuffer(block.blockNumber)); // Assign block number to the matching block hash
-
-                // Assign transaction index and block number to transaction hash
-                for (let txIndex = 0; txIndex < block.transactions.length; txIndex++) {
-                  const tx = Transaction.deserialize(block.transactions[txIndex]);
-                  const txHash = Transaction.getHash(tx);
-
-                  await txhashDB.put(txHash, block.blockNumber.toString() + " " + txIndex.toString());
-                }
-
-                if (!chainInfo.latestSyncBlock) {
-                  chainInfo.latestSyncBlock = block; // Update latest synced block.
-                  await changeState(block, stateDB, codeDB, ENABLE_LOGGING); // Force transit state
-                }
-
-                chainInfo.latestBlock = block; // Update latest block cache
-                console.log(`\x1b[32mLOG\x1b[0m [${(new Date()).toISOString()}] Synced block at position ${block.blockNumber}.`);
-                // await updateDifficulty(block, chainInfo, blockDB); // Update difficulty
-
-                chainInfo.syncing = false;
-                chainInfo.syncQueue.wipe(); // Wipe sync queue
-                currentSyncBlock++;
-
-                // Continue requesting the next block
-                for (const node of opened) {
-                  node.socket.send(produceMessage(TYPE.REQUEST_BLOCK, { blockNumber: currentSyncBlock,requestAddress: MY_ADDRESS,}));
-                }
-
-                return true;
-              }
-
-              return false;
-            };
-
-            chainInfo.syncQueue.add(block, verificationHandler);
-          }
-
-          break;
-
-        case TYPE.HANDSHAKE:
-          const address = _message.data;
-          console.log('Handshake call')
-          if (connectedNodes <= MAX_PEERS) {
-            try {
-              connect(MY_ADDRESS, address);
-            } catch (e) {
-              // Debug console.log(e);
-            }
-          }
-      }
-    });
-  });
-
-  if (!ENABLE_CHAIN_REQUEST) {
-    if ((await blockDB.keys().all()).length === 0) {
-      // Initial state
-
-      await stateDB.put(FIRST_ACCOUNT, Buffer.from(serializeState({balance: INITIAL_SUPPLY, codeHash: EMPTY_HASH, storageRoot: EMPTY_HASH})));
-
-      await blockDB.put(chainInfo.latestBlock.blockNumber.toString(), Buffer.from(Block.serialize(chainInfo.latestBlock)));
-      await bhashDB.put(chainInfo.latestBlock.hash, numToBuffer(chainInfo.latestBlock.blockNumber)); // Assign block number to the matching block hash
-
-      console.log(
-        `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Created Genesis Block with:\n` +
-          `    Block number: ${chainInfo.latestBlock.blockNumber.toString()}\n` +
-          `    Timestamp: ${chainInfo.latestBlock.timestamp.toString()}\n` +
-          // `    Difficulty: ${chainInfo.latestBlock.difficulty.toString()}\n` +
-          `    Coinbase: ${chainInfo.latestBlock.coinbase.toString()}\n` +
-          `    Hash: ${chainInfo.latestBlock.hash.toString()}\n` +
-          `    TxRoot: ${chainInfo.latestBlock.txRoot.toString()}`
-      );
-
-      await changeState(chainInfo.latestBlock, stateDB, codeDB);
-    } else {
-      chainInfo.latestBlock = Block.deserialize([...(await blockDB.get(Math.max(...(await blockDB.keys().all()).map((key) => parseInt(key))).toString())),]);
-      // chainInfo.difficulty = chainInfo.latestBlock.difficulty;
-    }
-  }
-
-  try {
-    PEERS.forEach((peer) => connect(MY_ADDRESS, peer)); // Connect to peers
-  } catch (e) {}
-
-  // Sync chain
-  let currentSyncBlock = 1;
-
-
-  if (ENABLE_CHAIN_REQUEST) {
-    console.log('Enable chain request')
-    const blockNumbers = await blockDB.keys().all();
-    // const blockNumbers = chainInfo.latestBlock.blockNumber;
-    // console.log(`block number ${blockNumbers}`)
-
-    // Get the last block in stateDB to synchronize
-    if (blockNumbers.length !== 0) {
-      currentSyncBlock = Math.max(...blockNumbers.map((key) => parseInt(key)));
-      // currentSyncBlock = 1;
-    }
-
-    if (currentSyncBlock === 1) {
-      console.log("Current sync block call")
-      // Initial state
-      await stateDB.put(FIRST_ACCOUNT, Buffer.from(serializeState({balance: INITIAL_SUPPLY,codeHash: EMPTY_HASH,storageRoot: EMPTY_HASH})));
-
-      await blockDB.put(chainInfo.latestBlock.blockNumber.toString(), Buffer.from(Block.serialize(chainInfo.latestBlock)));
-      await bhashDB.put(chainInfo.latestBlock.hash, numToBuffer(chainInfo.latestBlock.blockNumber)); // Assign block number to the matching block hash
-      await changeState(chainInfo.latestBlock, stateDB, codeDB);
-    }
-
-    setTimeout(async () => {
-      // Need to connect with other peers to run case TYPE.REQUEST_BLOCK 
-      for (const node of opened) {
-        // Send message REQUEST_BLOCK for others
-        node.socket.send(produceMessage(TYPE.REQUEST_BLOCK, {blockNumber: currentSyncBlock, requestAddress: MY_ADDRESS,}));
-      }
-    }, 1000);
-  }
-
-  // Transaction(recipient = "", amount = "0", gas = "1000000000000", additionalData = {}) {
-  // const transactionNew = new Transaction("04042809485ba7ee059057d2f1eedb5a1f5f208e15f775c17ffd0bd744df0dd2a285b52859ac708ee7ee9d43f61c3eb2a498527121f2b22a5b4ce17b84ccdb6bd3", 30, 20, {contractGas: 2})
-  // Transaction.sign(transactionNew, keyPair)
-  // await sendTransaction(transactionNew)
-
-  // const transaction1 = new Transaction("04324ae590b69c924fce7383f777c62868ce8a5deb23df58adb882f1c8d4e9cfa77e57a8a72832213bfbc6b641f42c492b638ae723e894db0463ddb3c8595f234b", 300, 200, {contractGas: 20})
-  // Transaction.sign(transaction1, keyPair)
-  // await sendTransaction(transaction1)
-
-  // const myContract = ``;
-  // const transaction = new Transaction("contract address", amount, gas, {
-  //   scBody: myContract
-  // });
-  // Transaction.sign(transaction, keyPair);
-  // sendTransaction(transaction);
-  
-  if (ENABLE_MINING) loopMine(publicKey, ENABLE_CHAIN_REQUEST, ENABLE_LOGGING);
-  if (ENABLE_RPC) rpc(RPC_PORT, { publicKey, mining: ENABLE_MINING, chainInfo }, sendTransaction, keyPair, stateDB, blockDB, bhashDB, codeDB, txhashDB);
-
-}
 
 // Function to connect to a node.
 function connect(MY_ADDRESS, address) {
@@ -477,8 +125,6 @@ async function sendTransaction(transaction) {
   await addTransaction(transaction, chainInfo, stateDB);
 }
 
-
-
 async function mine(publicKey, ENABLE_LOGGING) {
   function mine(block) {
     return new Promise((resolve, reject) => {
@@ -490,19 +136,19 @@ async function mine(publicKey, ENABLE_LOGGING) {
 
   // Block(blockNumber = 1, timestamp = Date.now(), transactions = [], parentHash = "",coinbase = "")
   // Create a new block.
-  const block = new Block(chainInfo.latestBlock.blockNumber + 1,
+  const block = new Block(
+    chainInfo.latestBlock.blockNumber + 1,
     Date.now(),
     [], // Will add transactions down here
     // chainInfo.difficulty,
     chainInfo.latestBlock.hash,
     SHA256(publicKey)
   );
-  console.log(block)
-  console.log('mine working')
+  // console.log(block)
   
   // Collect a list of transactions to mine
   const transactionsToMine = [];
-  const  states = {};
+  const states = {};
   const code = {};
   const storage = {};
   const skipped = {};
@@ -598,40 +244,48 @@ async function mine(publicKey, ENABLE_LOGGING) {
 
   // Mine the block.
   mine(block)
-    .then(async (result) => {
+    .then(async (block) => {
       // If the block is not mined before, we will add it to our chain and broadcast this new block.
       if (!mined) {
-        // await updateDifficulty(result, chainInfo, blockDB); // Update difficulty
+        // Đoạn này đưa pBFT vào
 
-        // console.log(result.blockNumber)
-        // console.log(result.timestamp)
-        // console.log(result.txRoot)
-        // console.log(result.hash)
-        console.log("Mine call")
-        console.log(Buffer.from(Block.serialize(result)));
+        // Tất cả transaction được đưa vào txPool trước đó sẽ được chuẩn bị để gửi cho Proposer
 
-        await blockDB.put(result.blockNumber.toString(), Buffer.from(Block.serialize(result))); // Add block to chain
-        await bhashDB.put(result.hash, numToBuffer(result.blockNumber)); // Assign block number to the matching block hash
+        // Cần có 1 blockPool lưu block trước khi được đưa vào Chain
+
+        // Block được đưa vào blockPool khi nhận được thông điệp pre-Prepare
+        
+        // Thông điệp commit được thêm vào sau khi nhận đủ 2f+1 thông điệp, cuối cùng, sử đụng thông
+        // điệp prepare để get block hash thay vì truyền cả block
+        
+
+        
+        // await updateDifficulty(block, chainInfo, blockDB); // Update difficulty
+        // console.log(block)
+
+        await blockDB.put(block.blockNumber.toString(), Buffer.from(Block.serialize(block))); // Add block to chain
+        await bhashDB.put(block.hash, numToBuffer(block.blockNumber)); // Assign block number to the matching block hash
 
         // Assign transaction index and block number to transaction hash
-        for (let txIndex = 0; txIndex < result.transactions.length; txIndex++) {
-          const tx = Transaction.deserialize(result.transactions[txIndex]);
+        for (let txIndex = 0; txIndex < block.transactions.length; txIndex++) {
+          const tx = Transaction.deserialize(block.transactions[txIndex]);
           const txHash = Transaction.getHash(tx);
 
-          await txhashDB.put(txHash, result.blockNumber.toString() + " " + txIndex.toString());
+          await txhashDB.put(txHash, block.blockNumber.toString() + " " + txIndex.toString());
         }
 
-        chainInfo.latestBlock = result; // Update latest block cache
-
+        chainInfo.latestBlock = block; // Update latest block cache
+        // console.log(chainInfo)
+        // return;
         // Reward
-        if (!existedAddresses.includes(result.coinbase) && !states[result.coinbase]) {
-          states[result.coinbase] = {balance: "0", codeHash: EMPTY_HASH, storageRoot: EMPTY_HASH,};
+        if (!existedAddresses.includes(block.coinbase) && !states[block.coinbase]) {
+          states[block.coinbase] = {balance: "0", codeHash: EMPTY_HASH, storageRoot: EMPTY_HASH,};
           code[EMPTY_HASH] = "";
         }
 
-        if (existedAddresses.includes(result.coinbase) && !states[result.coinbase]) {
-          states[result.coinbase] = deserializeState(await stateDB.get(result.coinbase));
-          code[states[result.coinbase].codeHash] = await codeDB.get(states[result.coinbase].codeHash);
+        if (existedAddresses.includes(block.coinbase) && !states[block.coinbase]) {
+          states[block.coinbase] = deserializeState(await stateDB.get(block.coinbase));
+          code[states[block.coinbase].codeHash] = await codeDB.get(states[block.coinbase].codeHash);
         }
 
         let gas = 0n;
@@ -640,7 +294,7 @@ async function mine(publicKey, ENABLE_LOGGING) {
           gas += BigInt(tx.gas) + BigInt(tx.additionalData.contractGas || 0);
         }
 
-        states[result.coinbase].balance = (BigInt(states[result.coinbase].balance) + BigInt(BLOCK_REWARD) + gas).toString();
+        states[block.coinbase].balance = (BigInt(states[block.coinbase].balance) + BigInt(BLOCK_REWARD) + gas).toString();
 
         // Transit state
         for (const address in storage) {
@@ -682,21 +336,442 @@ async function mine(publicKey, ENABLE_LOGGING) {
 }
 
 // Function to mine continuously
-function loopMine(publicKey, ENABLE_CHAIN_REQUEST, ENABLE_LOGGING, time = 2000) {
+function loopMine(publicKey, ENABLE_CHAIN_REQUEST, ENABLE_LOGGING, time = 5000) {
   let length = chainInfo.latestBlock.blockNumber;
   let mining = true;
 
   setInterval(async () => {
-    // if (mining || length !== chainInfo.latestBlock.blockNumber) {
-    //   mining = false;
-    //   length = chainInfo.latestBlock.blockNumber;
+    if (mining || length !== chainInfo.latestBlock.blockNumber) {
+        mining = false;
+        length = chainInfo.latestBlock.blockNumber;
 
-    //   if (!ENABLE_CHAIN_REQUEST) await mine(publicKey, ENABLE_LOGGING);
-      
-      console.log(chainInfo)
+        if (!ENABLE_CHAIN_REQUEST) await mine(publicKey, ENABLE_LOGGING);
+    }
+}, time);
+}
 
+// function loopMine(publicKey, ENABLE_CHAIN_REQUEST, ENABLE_LOGGING, time = 5000) {
+//   let length = chainInfo.latestBlock.blockNumber;
+//   let mining = true;
+
+//   setInterval(async () => {
+//     console.log(`Loop mine call`);
+
+//     // if (length !== chainInfo.latestBlock.blockNumber) {
+//       await mine(publicKey, ENABLE_LOGGING);
+//       return;
+//     // }
+//     console.log(chainInfo)
+
+//     // if (mining || length !== chainInfo.latestBlock.blockNumber) {
+//     //   mining = false;
+//     //   length = chainInfo.latestBlock.blockNumber;
+
+//     //   if (!ENABLE_CHAIN_REQUEST) await mine(publicKey, ENABLE_LOGGING);
+
+//     //   // console.log(`Chain info in loop Mine`);
+//     //   console.log(chainInfo)
+
+//     // }
+//   }, time);
+// }
+async function startServer(options) {
+  const PORT = options.PORT || 3000; // Node's PORT
+  const RPC_PORT = options.RPC_PORT || 5000; // RPC server's PORT
+  const PEERS = options.PEERS || []; // Peers to connect to
+  const MAX_PEERS = options.MAX_PEERS || 10; // Maximum number of peers to connect to
+  const MY_ADDRESS = options.MY_ADDRESS || "ws://localhost:3000"; // Node's address
+  const ENABLE_MINING = options.ENABLE_MINING ? true : false; // Enable mining?
+  const ENABLE_LOGGING = options.ENABLE_LOGGING ? true : false; // Enable logging?
+  const ENABLE_RPC = options.ENABLE_RPC ? true : false; // Enable RPC server?
+  let ENABLE_CHAIN_REQUEST = options.ENABLE_CHAIN_REQUEST ? true : false; // Enable chain sync request?
+  const GENESIS_HASH = options.GENESIS_HASH || ""; // Genesis block's hash
+
+  const privateKey = options.PRIVATE_KEY || ec.genKeyPair().getPrivate("hex");
+  const keyPair = ec.keyFromPrivate(privateKey, "hex");
+  const publicKey = keyPair.getPublic("hex");
+
+  process.on("uncaughtException", (err) =>
+    console.log(
+      `\x1b[31mERROR\x1b[0m [${new Date().toISOString()}] Uncaught Exception`,
+      err
+    )
+  );
+
+  await codeDB.put(EMPTY_HASH, "");
+
+  const server = new WS.Server({ port: PORT });
+
+  console.log(
+    `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] P2P server listening on PORT`,
+    PORT.toString()
+  );
+
+  server.on("connection", async (socket, req) => {
+    // Message handler
+    socket.on("message", async (message) => {
+      const _message = parseJSON(message); // Parse binary message to JSON
+
+      switch (_message.type) {
+        // Below are handlers for every message types.
+
+        case TYPE.NEW_BLOCK:
+          // "TYPE.NEW_BLOCK" is sent when someone wants to submit a new block.
+          // Its message body must contain the new block and the new difficulty.
+
+          let newBlock;
+          console.log("New Block call")
+
+          try {
+            newBlock = Block.deserialize(_message.data);
+          } catch (e) {
+            // If block fails to be deserialized, it's faulty
+            if (e.notFound) {
+              console.error(`Block number not found in blockDB: ${newBlock}`);
+            }
+            // If blo
+            return;
+          }
+
+        
+          // We will only continue checking the block if its parentHash is not the same as the latest block's hash.
+          // This is because the block sent to us is likely duplicated or from a node that has lost and should be discarded.
+
+          if (!chainInfo.checkedBlock[newBlock.hash]) {
+            chainInfo.checkedBlock[newBlock.hash] = true;
+          } else {
+            return;
+          }
+
+          if (newBlock.parentHash !== chainInfo.latestBlock.parentHash && 
+            (!ENABLE_CHAIN_REQUEST || (ENABLE_CHAIN_REQUEST && currentSyncBlock > 1))
+            // Only proceed if syncing is disabled or enabled but already synced at least the genesis block
+          ) {
+            chainInfo.checkedBlock[newBlock.hash] = true;
+
+            if (await verifyBlock(newBlock, chainInfo, stateDB, codeDB, ENABLE_LOGGING)) {
+              console.log( `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] New block received.`);
+
+              // If mining is enabled, we will set mined to true, informing that another node has mined before us.
+              if (ENABLE_MINING) {
+                mined = true;
+
+                worker.kill(); // Stop the worker thread
+
+                worker = fork(`${__dirname}/../miner/worker.js`); // Renew
+              }
+
+              // await updateDifficulty(newBlock, chainInfo, blockDB); // Update difficulty
+
+              // console.log(`NEW_BLOCK call ${newBlock.blockNumber}`)
+              await blockDB.put(newBlock.blockNumber.toString(), Buffer.from(_message.data)); // Add block to chain
+              await bhashDB.put(newBlock.hash, numToBuffer(newBlock.blockNumber)); // Assign block number to the matching block hash
+
+              // Apply to all txns of the block: Assign transaction index and block number to transaction hash
+              for (let txIndex = 0; txIndex < newBlock.transactions.length; txIndex++) {
+                const tx = Transaction.deserialize(newBlock.transactions[txIndex]);
+                const txHash = Transaction.getHash(tx);
+
+                await txhashDB.put(txHash, newBlock.blockNumber.toString() + " " + txIndex.toString());
+              }
+
+              chainInfo.latestBlock = newBlock; // Update latest block cache
+              // chainInfo.latestSyncBlock = newBlock;
+
+              // Update the new transaction pool (remove all the transactions that are no longer valid).
+              chainInfo.transactionPool = await clearDepreciatedTxns(chainInfo,stateDB);
+
+              console.log(`\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Block #${newBlock.blockNumber} synced, state transited.`);
+
+              sendMessage(message, opened); // Broadcast block to other nodes
+
+              if (ENABLE_CHAIN_REQUEST) {
+                ENABLE_CHAIN_REQUEST = false;
+              }
+            }
+          }
+
+          break;
+
+        case TYPE.CREATE_TRANSACTION:
+          if (ENABLE_CHAIN_REQUEST) break; // Unsynced nodes should not be able to proceed.
+
+          // TYPE.CREATE_TRANSACTION is sent when someone wants to submit a transaction.
+          // Its message body must contain a transaction.
+
+          // Weakly verify the transation, full verification is achieved in block production.
+
+          let transaction;
+          console.log(`Create transaction call`)
+
+          try {
+            transaction = Transaction.deserialize(_message.data);
+          } catch (e) {
+            // If transaction can not be deserialized, it's faulty
+            break;
+          }
+
+          if (!(await Transaction.isValid(transaction, stateDB))) break;
+
+          // Get public key and address from sender
+          const txSenderPubkey = Transaction.getPubKey(transaction);
+          const txSenderAddress = SHA256(txSenderPubkey);
+
+          if (!(await stateDB.keys().all()).includes(txSenderAddress)) break;
+
+          // After transaction is added, the transaction must be broadcasted to others since the sender might only send it to a few nodes.
+
+          // This is pretty much the same as addTransaction, but we will send the transaction to other connected nodes if it's valid.
+
+          // Check nonce
+          // let maxNonce = deserializeState(await stateDB.get(txSenderAddress)).nonce;
+
+          // for (const tx of chainInfo.transactionPool) {
+          //     const poolTxSenderPubkey = Transaction.getPubKey(transaction);
+          //     const poolTxSenderAddress = SHA256(poolTxSenderPubkey);
+
+          //     if (poolTxSenderAddress === txSenderAddress && tx.nonce > maxNonce) {
+          //         maxNonce = tx.nonce;
+          //     }
+          // }
+
+          // if (maxNonce + 1 !== transaction.nonce) return;
+
+          console.log(
+            `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] New transaction received, broadcasted and added to pool.`
+          );
+
+          chainInfo.transactionPool.push(transaction);
+
+          // Broadcast the transaction
+          sendMessage(message, opened);
+
+          break;
+
+        case TYPE.REQUEST_BLOCK:
+          const { blockNumber, requestAddress } = _message.data;
+          let requestedBlock;
+          console.log(`Request block call`)
+          console.log(`Block number ${blockNumber}`)
+          
+          try {
+            requestedBlock = [...(await blockDB.get(blockNumber.toString()))]; // Get block
+          } catch (err) {
+            if (err.notFound) {
+              console.error(`Block number not found in blockDB: ${blockNumber}`);
+            }
+            // If block does not exist, break
+            break;
+          }
+
+          const socket = opened.find((node) => node.address === requestAddress).socket; // Get socket from address
+          socket.send(produceMessage(TYPE.SEND_BLOCK, requestedBlock)); // Send block
+          console.log( `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Sent block at position ${blockNumber} to ${requestAddress}.`);
+
+          break;
+
+        case TYPE.SEND_BLOCK:
+          let block;
+          console.log(`Send block call`)
+          try {
+            block = Block.deserialize(_message.data);
+          } catch (e) {
+            // If block fails to be deserialized, it's faulty
+            return;
+          }
+
+          // If latest synced block is null, we immediately add the block into the chain without verification.
+          // This happens due to the fact that the genesis block can discard every possible set rule ¯\_(ツ)_/¯
+
+          // But wait, isn't that unsafe? Well, this is because we don't have an official JeChain "network" yet.
+          // But if there is, one can generate the first genesis block and we can add its hash into config,
+          // we then check if the genesis block matches with the hash which is safe.
+          if (ENABLE_CHAIN_REQUEST && block.blockNumber === currentSyncBlock) {
+            const verificationHandler = async function (block) {
+              console.log("Verification call")
+              
+              if ((chainInfo.latestSyncBlock === null && (!GENESIS_HASH || GENESIS_HASH === block.hash)) || // For genesis
+                await verifyBlock(block, chainInfo, stateDB, codeDB, ENABLE_LOGGING) // For all others
+              ) {
+                await blockDB.put(block.blockNumber.toString(), Buffer.from(_message.data)); // Add block to chain
+                await bhashDB.put(block.hash, numToBuffer(block.blockNumber)); // Assign block number to the matching block hash
+
+                // Assign transaction index and block number to transaction hash
+                for (let txIndex = 0; txIndex < block.transactions.length; txIndex++) {
+                  const tx = Transaction.deserialize(block.transactions[txIndex]);
+                  const txHash = Transaction.getHash(tx);
+
+                  await txhashDB.put(txHash, block.blockNumber.toString() + " " + txIndex.toString());
+                }
+
+                if (!chainInfo.latestSyncBlock) {
+                  chainInfo.latestSyncBlock = block; // Update latest synced block.
+                  await changeState(block, stateDB, codeDB, ENABLE_LOGGING); // Force transit state
+                } 
+
+                chainInfo.latestBlock = block; // Update latest block cache
+                console.log(`\x1b[32mLOG\x1b[0m [${(new Date()).toISOString()}] Synced block at position ${block.blockNumber}.`);
+                // await updateDifficulty(block, chainInfo, blockDB); // Update difficulty
+                console.log(`Syncing: ${chainInfo.syncing}`)
+                chainInfo.syncing = false;
+                chainInfo.syncQueue.wipe(); // Wipe sync queue
+                currentSyncBlock++;
+
+                // Continue requesting the next block
+                for (const node of opened) {
+                  node.socket.send(produceMessage(TYPE.REQUEST_BLOCK, { blockNumber: currentSyncBlock,requestAddress: MY_ADDRESS,}));
+                }
+
+                return true;
+              } 
+              // else {
+              //   if (!chainInfo.latestSyncBlock) {
+              //     chainInfo.latestSyncBlock = block; // Update latest synced block.
+              //     await changeState(block, stateDB, codeDB, ENABLE_LOGGING); // Force transit state
+              //   }
+
+              //   chainInfo.latestBlock = block; // Update latest block cache
+              //   console.log(`\x1b[32mLOG\x1b[0m [${(new Date()).toISOString()}] Synced block at position ${block.blockNumber}.`);
+              //   // await updateDifficulty(block, chainInfo, blockDB); // Update difficulty
+              //   console.log(`Syncing: ${chainInfo.syncing}`)
+              //   chainInfo.syncing = false;
+              //   chainInfo.syncQueue.wipe(); // Wipe sync queue
+              //   currentSyncBlock++;
+
+              //   // Continue requesting the next block
+              //   for (const node of opened) {
+              //     node.socket.send(produceMessage(TYPE.REQUEST_BLOCK, { blockNumber: currentSyncBlock,requestAddress: MY_ADDRESS,}));
+              //   }
+              // }
+
+              return false;
+            };
+
+            chainInfo.syncQueue.add(block, verificationHandler);
+          }
+
+          break;
+
+        case TYPE.HANDSHAKE:
+          const address = _message.data;
+          console.log(`Handshake call`)
+
+          if (connectedNodes <= MAX_PEERS) {
+            try {
+              connect(MY_ADDRESS, address);
+            } catch (e) {
+              // Debug console.log(e);
+            }
+          }
+      }
+    });
+  });
+
+
+  if (!ENABLE_CHAIN_REQUEST) {
+
+    console.log(`!ENABLE_CHAIN_REQUEST`)
+    if ((await blockDB.keys().all()).length === 0) {
+      // Initial state
+      console.log(chainInfo.latestBlock)
+      await stateDB.put(FIRST_ACCOUNT, Buffer.from(serializeState({balance: INITIAL_SUPPLY, codeHash: EMPTY_HASH, storageRoot: EMPTY_HASH})));
+
+      await blockDB.put(chainInfo.latestBlock.blockNumber.toString(), Buffer.from(Block.serialize(chainInfo.latestBlock)));
+      await bhashDB.put(chainInfo.latestBlock.hash, numToBuffer(chainInfo.latestBlock.blockNumber)); // Assign block number to the matching block hash
+
+      console.log(
+        `\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Created Genesis Block with:\n` +
+          `    Block number: ${chainInfo.latestBlock.blockNumber.toString()}\n` +
+          `    Timestamp: ${chainInfo.latestBlock.timestamp.toString()}\n` +
+          `    Coinbase: ${chainInfo.latestBlock.coinbase.toString()}\n` +
+          `    Hash: ${chainInfo.latestBlock.hash.toString()}\n` +
+          `    TxRoot: ${chainInfo.latestBlock.txRoot.toString()}`
+      );
+
+      await changeState(chainInfo.latestBlock, stateDB, codeDB);
+    } else {
+      // Update latest block in chain cache
+      chainInfo.latestBlock = Block.deserialize([...await blockDB.get( Math.max(...(await blockDB.keys().all()).map(key => parseInt(key))).toString() )]);
+      // const highestBlockNumber = Math.max(...(await blockDB.keys().all()).map((key) => parseInt(key))).toString()
+      // const latestBlock = Block.deserialize([...(await blockDB.get(highestBlockNumber))]);
+
+      // chainInfo.latestBlock = latestBlock;
+    }
+  }
+
+  try {
+    PEERS.forEach((peer) => connect(MY_ADDRESS, peer)); // Connect to peers
+  } catch (e) {}
+
+  // Sync chain
+  let currentSyncBlock = 1;
+
+  if (ENABLE_CHAIN_REQUEST) {
+    
+    const blockNumbers = await blockDB.keys().all();
+    // const blockNumbers = chainInfo.latestBlock.blockNumber;
+
+    // Get the last block in stateDB to synchronize
+    if (blockNumbers.length !== 0) {
+      currentSyncBlock = Math.max(...blockNumbers.map((key) => parseInt(key)));
+      // currentSyncBlock = 1;
+    }
+    console.log(`ENABLE_CHAIN_REQUEST`)
+    if (currentSyncBlock === 1) {
+      console.log("Current sync block call")
+      // Lưu trạng thái khởi tạo vào tài khoản FIRST_ACCOUNT trong database stateDB
+      await stateDB.put(FIRST_ACCOUNT, Buffer.from(serializeState({balance: INITIAL_SUPPLY,codeHash: EMPTY_HASH,storageRoot: EMPTY_HASH})));
+
+      // Lưu thông tin Block hiện tại vào bản ghi có key số thứ tự của block (BlockNumber) trong database blockDB
+      // await blockDB.put(chainInfo.latestBlock.blockNumber.toString(), Buffer.from(Block.serialize(chainInfo.latestBlock)));
+
+      // Lưu BlockNumber của block  vào hash của block cuối cùng của chain trong database bhashDB
+      // await bhashDB.put(chainInfo.latestBlock.hash, numToBuffer(chainInfo.latestBlock.blockNumber)); // Assign block number to the matching block hash
+
+      // Update trạng thái của chainInfo, database thay đổi là stateDB và codeDB
+      // await changeState(chainInfo.latestBlock, stateDB, codeDB);
+    } 
+    
+    // if ((await blockDB.keys().all()).length !== 0) {
+    //   chainInfo.latestBlock = Block.deserialize([...(await blockDB.get(Math.max(...(await blockDB.keys().all()).map((key) => parseInt(key))).toString())),]);
     // }
-  }, time);
+    // if (pbft) {
+    //   ENABLE_MINING = true;
+    // } else {
+    //   ENABLE_MINING;
+    // }
+
+    // if (ENABLE_MINING) {
+      setTimeout(async () => {
+        // Need to connect with other peers to run case TYPE.REQUEST_BLOCK 
+        for (const node of opened) {
+          // Send message REQUEST_BLOCK for others
+          // console.log(`Current sync block: ${currentSyncBlock}`);
+          node.socket.send(produceMessage(TYPE.REQUEST_BLOCK, {blockNumber: currentSyncBlock, requestAddress: MY_ADDRESS,}));
+        }
+      }, 5000);
+    // }
+  }
+
+  // Transaction(recipient = "", amount = "0", gas = "1000000000000", additionalData = {}) {
+  // const transactionNew = new Transaction("04042809485ba7ee059057d2f1eedb5a1f5f208e15f775c17ffd0bd744df0dd2a285b52859ac708ee7ee9d43f61c3eb2a498527121f2b22a5b4ce17b84ccdb6bd3", 30, 20, {contractGas: 2})
+  // Transaction.sign(transactionNew, keyPair)
+  // await sendTransaction(transactionNew)
+
+  // const transaction1 = new Transaction("04324ae590b69c924fce7383f777c62868ce8a5deb23df58adb882f1c8d4e9cfa77e57a8a72832213bfbc6b641f42c492b638ae723e894db0463ddb3c8595f234b", 300, 200, {contractGas: 20})
+  // Transaction.sign(transaction1, keyPair)
+  // await sendTransaction(transaction1)
+
+  // const myContract = ``;
+  // const transaction = new Transaction("contract address", amount, gas, {
+  //   scBody: myContract
+  // });
+  // Transaction.sign(transaction, keyPair);
+  // sendTransaction(transaction);
+  
+  if (ENABLE_MINING) loopMine(publicKey, ENABLE_CHAIN_REQUEST, ENABLE_LOGGING);
+  if (ENABLE_RPC) rpc(RPC_PORT, { publicKey, mining: ENABLE_MINING, chainInfo }, sendTransaction, keyPair, stateDB, blockDB, bhashDB, codeDB, txhashDB);
+
 }
 
 module.exports = { startServer };

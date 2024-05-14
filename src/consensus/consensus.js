@@ -24,15 +24,14 @@ async function verifyBlock(newBlock, chainInfo, stateDB, codeDB, enableLogging =
             chainInfo.latestBlock.hash
             // newBlock.difficulty.toString()        +
             // chainInfo.latestBlock.hash            +
-            // newBlock.nonce.toString() => 
+            // newBlock.nonce.to String() => 
 
             // Difficulty = 0x000000000000000000000000000012
             // Nếu 10 phút chưa có ai đào được, 27
             // if( NumOfZero(Hash(nonce) >= 1000))  0 - 7, 0 - 199
             // Phí giao dịch, transaction có 0.2 coin
             // Được phép lấy các transaction từ 
-        ) === newBlock.hash &&
-        chainInfo.latestBlock.hash === newBlock.parentHash &&
+        ) === newBlock.hash && chainInfo.latestBlock.hash === newBlock.parentHash &&
         
         // Check proof of work
         // newBlock.hash.startsWith("00000" + Array(Math.floor(log16(chainInfo.difficulty)) + 1).join("0")) &&

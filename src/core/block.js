@@ -154,9 +154,7 @@ class Block {
     const existedAddresses = await stateDB.keys().all();
 
     // If senders' address doesn't exist, return false
-    if (
-      !addressesInBlock.every((address) => existedAddresses.includes(address))
-    )
+    if (!addressesInBlock.every((address) => existedAddresses.includes(address)))
       return false;
 
     // Start state replay to check if transactions are legit
@@ -174,9 +172,7 @@ class Block {
         BigInt(tx.additionalData.contractGas || 0);
 
       if (!states[transactionSenderAddress]) {
-        const senderState = deserializeState(
-          await stateDB.get(transactionSenderAddress)
-        );
+        const senderState = deserializeState(await stateDB.get(transactionSenderAddress));
 
         states[transactionSenderAddress] = senderState;
 
@@ -334,9 +330,7 @@ class Block {
       );
     }
 
-    myBlock.transactions = myBlock.transactions.map((tx) =>
-      Transaction.serialize(tx)
-    );
+    myBlock.transactions = myBlock.transactions.map((tx) => Transaction.serialize(tx));
 
     return true;
   }

@@ -35,21 +35,23 @@ class Transaction {
 
         // Recipient
         txHexString += tx.recipient.padStart(64, "0");
+        console.log(`String recipient: ${tx.recipient.padStart(64, "0")}`)
         
         // Amount
         txHexString += BigInt(tx.amount).toString(16).padStart(22, "0");
+        console.log(`String amount: ${BigInt(tx.amount).toString(16).padStart(22, "0")}`)
 
         // Gas
         txHexString += BigInt(tx.gas).toString(16).padStart(22, "0");
-
+        console.log(`String gas: ${BigInt(tx.gas).toString(16).padStart(22, "0")}`)
+        
         // Nonce
         // txHexString += tx.nonce.toString(16).padStart(6, "0");
 
         // Signature
-        txHexString += tx.signature.r.padStart(64, "0") +
-                       tx.signature.s.padStart(64, "0") +
-                       tx.signature.v.padStart(2, "0");
+        txHexString += tx.signature.r.padStart(64, "0") + tx.signature.s.padStart(64, "0") + tx.signature.v.padStart(2, "0");
         
+        console.log(`String signature: ${tx.signature.r.padStart(64, "0") + tx.signature.s.padStart(64, "0") + tx.signature.v.padStart(2, "0")}`)
         // Additional data
         if (typeof tx.additionalData.scBody === "string") {
             let scBodyHex = Buffer.from(tx.additionalData.scBody, "utf8").toString("hex");
@@ -59,6 +61,7 @@ class Transaction {
             txHexString += "00" + scBodyHex;
         } else if (typeof tx.additionalData.contractGas === "string") {
             txHexString += "01" + BigInt(tx.additionalData.contractGas).toString(16).padStart(22, "0");
+            console.log(`String additional data: ${BigInt(tx.additionalData.contractGas).toString(16).padStart(22, "0")}`)
             
             if (Array.isArray(tx.additionalData.txCallArgs)) {
                 for (const arg of tx.additionalData.txCallArgs) {
@@ -76,6 +79,7 @@ class Transaction {
         } else {
             txHexString += "02";
         }
+        console.log(`Serialize: ${txHexString}`)
 
         return new Array(...Buffer.from(txHexString, "hex"));
     }
@@ -83,32 +87,45 @@ class Transaction {
     static deserialize(tx) {  
 
         let txHexString = Buffer.from(tx).toString("hex");
+        console.log(`Deserialize: ${txHexString}`)
+
 
         const txObj = { signature: {}, additionalData: {} };
 
         txObj.recipient = txHexString.slice(0, 64);
         txHexString = txHexString.slice(64);
+        console.log(`Recipient: ${txObj.recipient}`)
+
 
         txObj.amount = BigInt("0x"+ txHexString.slice(0, 22)).toString();
         txHexString = txHexString.slice(22);
+        console.log(`Amount: ${txObj.amount}`)
+
 
         txObj.gas = BigInt("0x" + txHexString.slice(0, 22)).toString();
         txHexString = txHexString.slice(22);
+        console.log(`Gas: ${txObj.gas}`)
+
 
         // txObj.nonce = parseInt("0x" + txHexString.slice(0, 6));
         // txHexString = txHexString.slice(6);
 
         txObj.signature.r = txHexString.slice(0, 64);
         txHexString = txHexString.slice(64);
+        console.log(`Signature.r: ${txObj.signature.r}`)
 
         txObj.signature.s = txHexString.slice(0, 64);
         txHexString = txHexString.slice(64);
+        console.log(`Signature.s: ${txObj.signature.s}`)
 
         txObj.signature.v = txHexString.slice(0, 2);
         txHexString = txHexString.slice(2);
+        console.log(`Signature.v: ${txObj.signature.v}`)
+
 
         const contractFlag = parseInt("0x" + txHexString.slice(0, 2));
         txHexString = txHexString.slice(2);
+        console.log(`Remainding string: ${txHexString}`)
 
         if (contractFlag === CONTRACT_FLAG.DEPLOY) {
             txObj.additionalData.scBody = Buffer.from(txHexString, "hex").toString("utf8");
@@ -128,18 +145,24 @@ class Transaction {
                 txHexString = txHexString.slice(offset * 2);
             }
         } // Any other flag will make the additional data empty
+        console.log(`Contract gas: ${txObj.additionalData.contractGas}`)
 
         return txObj;
     }
 
     static getHash(tx) {
-        return SHA256(
-            tx.recipient.padStart(64, "0")    +
-            tx.amount                         +
-            tx.gas                            +
-            JSON.stringify(tx.additionalData) 
-            // tx.nonce.toString()
-        )
+        // console.log(typeof tx);
+        // tx.forEach(t => {
+            // console.log(SHA256(t.recipient.padStart(64, "0") + t.amount + t.gas + JSON.stringify(t.additionalData)))
+        // });
+        return SHA256(tx.recipient.padStart(64, "0") + tx.amount + tx.gas + JSON.stringify(tx.additionalData));
+
+        // return SHA256(
+        //     tx.recipient.padStart(64, "0")    +
+        //     tx.amount                         +
+        //     tx.gas                            +
+        //     JSON.stringify(tx.additionalData) 
+        // )
     }
 
     static sign(transaction, keyPair) {
@@ -155,12 +178,13 @@ class Transaction {
     static getPubKey(tx) {
         // Get transaction's body's hash and recover original signature object
         const msgHash = Transaction.getHash(tx);
-
+        
         const sigObj = {
             r: new BN(tx.signature.r, 16),
             s: new BN(tx.signature.s, 16),
             recoveryParam: parseInt(tx.signature.v, 16)
         };
+
         
         // Recover public key and get real address.
         const txSenderPubkey = ec.recoverPubKey(
@@ -169,32 +193,37 @@ class Transaction {
             sigObj.recoveryParam
         );
 
+        // console.log(`sender public key: ${ec.keyFromPublic(txSenderPubkey).getPublic("hex")}`)
+
         return ec.keyFromPublic(txSenderPubkey).getPublic("hex");
     }
 
     static async isValid(tx, stateDB) {
-        let txSenderPubkey;
+        // let txSenderPubkey;
         
         // If recovering public key fails, then transaction is not valid.
-        try {
-            txSenderPubkey = Transaction.getPubKey(tx);
-        } catch (e) {
-            return false;
-        }
+        // try {
+        //     txSenderPubkey = Transaction.getPubKey(tx);
+        // } catch (e) {
+        //     return false;
+        // }
 
-        const txSenderAddress = SHA256(txSenderPubkey);
+        // const txSenderAddress = SHA256(txSenderPubkey);
+        console.log(tx.recipient)
+        const txSenderAddress = tx.recipient;
 
         // If sender does not exist return false
         if (!(await stateDB.keys().all()).includes(txSenderAddress)) {
             console.log(`Address ${txSenderAddress} is not in state!`);
             return false;
         }
-        // Fetch sender's state object
         const dataFromSender = deserializeState(await stateDB.get(txSenderAddress));
-
+        
         // If sender is a contract address, then it's not supposed to be used to send money, so return false if it is.
-
+        
         if (dataFromSender.codeHash !== EMPTY_HASH) return false;
+        // Fetch sender's state object
+        console.log(dataFromSender)
 
         return true;
 

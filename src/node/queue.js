@@ -11,14 +11,18 @@ class SyncQueue {
 
         if (!this.chainInfo.syncing) {
             this.chainInfo.syncing = true;
+            // console.log(`Sync in add function: ${this.chainInfo.syncing}`);
+            
             await this.sync(verificationHandler);
         }
+
     }
 
     async sync(verificationHandler) {
         while (this.queue.length !== 0) {
-            const block = this.queue.shift();
-
+            const block = this.queue.shift(); // Trả về phần tử đầu tiên của mảng và bỏ phần tử đấy đi
+            // console.log(`Sync in sync function: ${this.chainInfo.syncing}`);
+            
             if (await verificationHandler(block)) break;
         }
 
