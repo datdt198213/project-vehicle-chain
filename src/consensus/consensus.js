@@ -58,6 +58,13 @@ async function verifyBlock(newBlock, chainInfo, stateDB, codeDB, enableLogging =
     )
 }
 
+async function getProposer(validatorList, chainInfo, PEERS){
+    let viewIndex = chainInfo.newBlock.hash.charCodeAt(0) % PEERS.length;
+    validatorList.push(viewIndex)
+    
+    return validatorList[viewIndex];
+}
+
 // async function updateDifficulty(newBlock, chainInfo, blockDB) {
 //     if (newBlock.blockNumber % 100 === 0) {
 //         const oldBlock = Block.deserialize([...await blockDB.get((newBlock.blockNumber - 99).toString())]);
@@ -67,4 +74,4 @@ async function verifyBlock(newBlock, chainInfo, stateDB, codeDB, enableLogging =
 // }
 
 // module.exports = { verifyBlock, updateDifficulty };
-module.exports = { verifyBlock };
+module.exports = { verifyBlock, getProposer };

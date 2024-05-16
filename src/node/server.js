@@ -320,7 +320,7 @@ async function mine(publicKey, ENABLE_LOGGING) {
         chainInfo.transactionPool = await clearDepreciatedTxns(chainInfo, stateDB);
 
         sendMessage(produceMessage(TYPE.NEW_BLOCK, Block.serialize(chainInfo.latestBlock)), opened); // Broadcast the new block
-
+        console.log(chainInfo)
         console.log(`\x1b[32mLOG\x1b[0m [${new Date().toISOString()}] Block #${chainInfo.latestBlock.blockNumber} mined and synced, state transited.`);
         
       } else {
@@ -341,11 +341,15 @@ function loopMine(publicKey, ENABLE_CHAIN_REQUEST, ENABLE_LOGGING, time = 5000) 
   let mining = true;
 
   setInterval(async () => {
+    console.log(`loop mine call`)
     if (mining || length !== chainInfo.latestBlock.blockNumber) {
         mining = false;
         length = chainInfo.latestBlock.blockNumber;
 
         if (!ENABLE_CHAIN_REQUEST) await mine(publicKey, ENABLE_LOGGING);
+
+        console.log("ChainInfo in Loop mine")
+        console.log(chainInfo)
     }
 }, time);
 }
