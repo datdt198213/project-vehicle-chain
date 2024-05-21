@@ -1,68 +1,78 @@
-const crypto = require("crypto"), SHA256 = message => crypto.createHash("sha256").update(message).digest("hex");
+const crypto = require("crypto"),
+  SHA256 = (message) =>
+    crypto.createHash("sha256").update(message).digest("hex");
 const Block = require("../core/block");
 const { log16 } = require("../utils/utils");
 const Merkle = require("../core/merkle");
 const { BLOCK_TIME } = require("../config.json");
 
-async function verifyBlock(newBlock, chainInfo, stateDB, codeDB, enableLogging = false) {
-    // Check if the block is valid or not, if yes, we will push it to the chain, update the difficulty, chain state and the transaction pool.
-                        
-    // A block is valid under these factors:
-    // - The hash of this block is equal to the hash re-generated according to the block's info.
-    // - The block is mined (the hash starts with (4+difficulty) amount of zeros).
-    // - Transactions in the block are valid.
-    // - Block's timestamp is not greater than the current timestamp and is not lower than the previous block's timestamp.
-    // - Block's parentHash is equal to latest block's hash
-    // - The new difficulty can only be greater than 1 or lower than 1 compared to the old difficulty.
+async function verifyBlock(
+  newBlock,
+  chainInfo,
+  stateDB,
+  codeDB,
+  enableLogging = false
+) {
+  // Check if the block is valid or not, if yes, we will push it to the chain, update the difficulty, chain state and the transaction pool.
 
-    return (
-        // Check hash
-        SHA256(
-            newBlock.blockNumber.toString()       + 
-            newBlock.timestamp.toString()         + 
-            newBlock.txRoot                       + 
-            chainInfo.latestBlock.hash
-            // newBlock.difficulty.toString()        +
-            // chainInfo.latestBlock.hash            +
-            // newBlock.nonce.to String() => 
+  // A block is valid under these factors:
+  // - The hash of this block is equal to the hash re-generated according to the block's info.
+  // - The block is mined (the hash starts with (4+difficulty) amount of zeros).
+  // - Transactions in the block are valid.
+  // - Block's timestamp is not greater than the current timestamp and is not lower than the previous block's timestamp.
+  // - Block's parentHash is equal to latest block's hash
+  // - The new difficulty can only be greater than 1 or lower than 1 compared to the old difficulty.
 
-            // Difficulty = 0x000000000000000000000000000012
-            // Nếu 10 phút chưa có ai đào được, 27
-            // if( NumOfZero(Hash(nonce) >= 1000))  0 - 7, 0 - 199
-            // Phí giao dịch, transaction có 0.2 coin
-            // Được phép lấy các transaction từ 
-        ) === newBlock.hash && chainInfo.latestBlock.hash === newBlock.parentHash &&
-        
-        // Check proof of work
-        // newBlock.hash.startsWith("00000" + Array(Math.floor(log16(chainInfo.difficulty)) + 1).join("0")) &&
-        // newBlock.difficulty === chainInfo.difficulty &&
+  return (
+    // Check hash
+    SHA256(
+      newBlock.blockNumber.toString() +
+        newBlock.timestamp.toString() +
+        newBlock.txRoot +
+        chainInfo.latestBlock.hash
+      // newBlock.difficulty.toString()        +
+      // chainInfo.latestBlock.hash            +
+      // newBlock.nonce.to String() =>
 
-        // Check transactions ordering
-        await Block.hasValidTxOrder(newBlock, stateDB) &&
+      // Difficulty = 0x000000000000000000000000000012
+      // Nếu 10 phút chưa có ai đào được, 27
+      // if( NumOfZero(Hash(nonce) >= 1000))  0 - 7, 0 - 199
+      // Phí giao dịch, transaction có 0.2 coin
+      // Được phép lấy các transaction từ
+    ) === newBlock.hash &&
+    // Check parent hash
+    chainInfo.latestBlock.hash === newBlock.parentHash &&
+    // Check proof of work
+    // newBlock.hash.startsWith("00000" + Array(Math.floor(log16(chainInfo.difficulty)) + 1).join("0")) &&
+    // newBlock.difficulty === chainInfo.difficulty &&
 
-        // Check transaction trie root
-        Merkle.buildTxTrie(newBlock.transactions).root === newBlock.txRoot &&
-        
-        // Check timestamp
-        newBlock.timestamp > chainInfo.latestBlock.timestamp &&
-        newBlock.timestamp < Date.now() &&
-    
-        // Check block number
-        newBlock.blockNumber - 1 === chainInfo.latestBlock.blockNumber &&
-
-        // Check gas limit
-        Block.hasValidGasLimit(newBlock) &&
-
-        // Check transactions and transit state right after
-        await Block.verifyTransactionAndTransit(newBlock, stateDB, codeDB, enableLogging)
-    )
+    // Check transactions ordering
+    (await Block.hasValidTxOrder(newBlock, stateDB)) &&
+    // Check transaction trie root
+    Merkle.buildTxTrie(newBlock.transactions).root === newBlock.txRoot &&
+    // Check timestamp
+    newBlock.timestamp > chainInfo.latestBlock.timestamp &&
+    newBlock.timestamp < Date.now() &&
+    // Check block number
+    newBlock.blockNumber - 1 === chainInfo.latestBlock.blockNumber &&
+    // // Check proposer
+    // (await Block.verifyProposer(newBlock)) &&
+    // Check gas limit
+    Block.hasValidGasLimit(newBlock) &&
+    // Check transactions and transit state right after
+    (await Block.verifyTransactionAndTransit(
+      newBlock,
+      stateDB,
+      codeDB,
+      enableLogging
+    ))
+  );
 }
 
-async function getProposer(validatorList, chainInfo, PEERS){
-    let viewIndex = chainInfo.newBlock.hash.charCodeAt(0) % PEERS.length;
-    validatorList.push(viewIndex)
-    
-    return validatorList[viewIndex];
+async function chooseProposer(validatorList, newBlock) {
+  let viewIndex = newBlock.hash.charCodeAt(0) % validatorList.length;
+
+  return validatorList[viewIndex];
 }
 
 // async function updateDifficulty(newBlock, chainInfo, blockDB) {
@@ -74,4 +84,4 @@ async function getProposer(validatorList, chainInfo, PEERS){
 // }
 
 // module.exports = { verifyBlock, updateDifficulty };
-module.exports = { verifyBlock, getProposer };
+module.exports = { verifyBlock, chooseProposer };

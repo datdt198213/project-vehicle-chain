@@ -1,9 +1,11 @@
 const TYPE = {
-    NEW_BLOCK: 0,
-    CREATE_TRANSACTION: 1,
-    REQUEST_BLOCK: 2,
-    SEND_BLOCK: 3,
-    HANDSHAKE: 4
-}
+  HANDSHAKE: 0,
+  REQUEST_BLOCK: 1,
+  SEND_BLOCK: 2,
+  CREATE_TRANSACTION: 3,
+  NEW_BLOCK: 4,
+  PREPARE: 5,
+  COMMIT: 6,
+};
 
 module.exports = TYPE;

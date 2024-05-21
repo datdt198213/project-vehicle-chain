@@ -10,20 +10,20 @@ class PreparePool {
     }
 
     // prepare khởi tạo một danh sách các thông điệp prepare của một block
-    // gắn thông điệp commit cho từng node hiện tại và trả lại 
+    // gắn thông điệp prepare cho từng node hiện tại và trả lại 
     prepare(block, transaction) {
         let prepare = this.createPrepare(block, transaction);
         this.list[block.hash] = [];
         this.list[block.hash].push(prepare);
         return prepare;
-      }
+    }
 
     // tạo thông điệp prepare cho block
-    createPrepare(block,transaction){
+    createPrepare(block, transaction) {
         let prepare = {
             blockHash: block.hash,
             publicKey: transaction.getPubKey(tx),
-            signature: transaction.sign(tx,keyPair)
+            signature: transaction.sign(tx, keyPair) // ???
         };
 
         return prepare;
@@ -45,7 +45,19 @@ class PreparePool {
     // validate thông điệp prepare
     isValidPrepare(prepare) {
         return ec.keyFromPublic(prepare.publicKey)
-            .verify(prepare.signature,prepare.blockHash);
+            .verify(prepare.signature, prepare.blockHash);
+    }
+
+    clearPreparePool(chainInfo, prepare) {
+        const preparePool = chainInfo.preparePool;
+
+        const newPreparePool = [];
+        // let skipped = {};
+
+        for (const prepareMessage of preparePool) {
+        }
+
+        return newPreparePool;
     }
 }
 

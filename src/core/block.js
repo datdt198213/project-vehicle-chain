@@ -6,6 +6,7 @@ const crypto = require("crypto"),
     crypto.createHash("sha256").update(message).digest("hex");
 const EC = require("elliptic").ec,
   ec = new EC("secp256k1");
+const { PRIVATE_KEY } = require("../../config.json");
 const Transaction = require("./transaction");
 const Merkle = require("./merkle");
 const { BLOCK_REWARD, BLOCK_GAS_LIMIT, EMPTY_HASH } = require("../config.json");
@@ -13,7 +14,13 @@ const jelscript = require("./runtime");
 const { serializeState, deserializeState } = require("../utils/utils");
 
 class Block {
-  constructor(blockNumber = 1, timestamp = Date.now(), transactions = [], parentHash = "", coinbase = "") {
+  constructor(
+    blockNumber = 1,
+    timestamp = Date.now(),
+    transactions = [],
+    parentHash = "",
+    coinbase = ""
+  ) {
     this.transactions = transactions; // Transaction list
 
     // Block header
@@ -52,7 +59,7 @@ class Block {
     blockHexStr += inputBlock.parentHash.toString(16).padStart(64, "0");
     // Tx root
     blockHexStr += inputBlock.txRoot.toString(16).padStart(64, "0");
-    // Coinbase
+    // Coinbase & proposer
     blockHexStr += inputBlock.coinbase.toString(16).padStart(64, "0");
     // Hash
     blockHexStr += inputBlock.hash.toString(16).padStart(64, "0");
@@ -84,14 +91,14 @@ class Block {
     blockHexStr = blockHexStr.slice(12);
 
     // Parent Hash
-    myBlock.parentHash = blockHexStr.slice(0, 64), 16;
+    (myBlock.parentHash = blockHexStr.slice(0, 64)), 16;
     blockHexStr = blockHexStr.slice(64);
 
     // Tx root
     myBlock.txRoot = blockHexStr.slice(0, 64);
     blockHexStr = blockHexStr.slice(64);
 
-    // Coinbase
+    // Coinbase & proposer
     myBlock.coinbase = blockHexStr.slice(0, 64);
     blockHexStr = blockHexStr.slice(64);
 
@@ -136,6 +143,17 @@ class Block {
     );
   }
 
+  // Get proposer address
+  static getCoinbase(PRIVATE_KEY) {
+    const keyPair = ec.keyFromPrivate(PRIVATE_KEY, "hex");
+
+    return SHA256(keyPair.getPublic("hex"));
+  }
+
+  static async verifyCoinbase(block, coinbase) {
+    return block.coinbase == coinbase ? true : false;
+  }
+
   static async verifyTransactionAndTransit(
     myBlock,
     stateDB,
@@ -154,7 +172,9 @@ class Block {
     const existedAddresses = await stateDB.keys().all();
 
     // If senders' address doesn't exist, return false
-    if (!addressesInBlock.every((address) => existedAddresses.includes(address)))
+    if (
+      !addressesInBlock.every((address) => existedAddresses.includes(address))
+    )
       return false;
 
     // Start state replay to check if transactions are legit
@@ -172,7 +192,9 @@ class Block {
         BigInt(tx.additionalData.contractGas || 0);
 
       if (!states[transactionSenderAddress]) {
-        const senderState = deserializeState(await stateDB.get(transactionSenderAddress));
+        const senderState = deserializeState(
+          await stateDB.get(transactionSenderAddress)
+        );
 
         states[transactionSenderAddress] = senderState;
 
@@ -330,7 +352,9 @@ class Block {
       );
     }
 
-    myBlock.transactions = myBlock.transactions.map((tx) => Transaction.serialize(tx));
+    myBlock.transactions = myBlock.transactions.map((tx) =>
+      Transaction.serialize(tx)
+    );
 
     return true;
   }
